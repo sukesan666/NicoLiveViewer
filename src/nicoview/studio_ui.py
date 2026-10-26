@@ -582,7 +582,7 @@ class StudioApp:
         self.root.option_add('*TCombobox*Listbox.selectBackground','#505050')
         for kind in ('TButton','TCheckbutton','TRadiobutton','TCombobox','TEntry','TNotebook.Tab'):
             style.map(kind,foreground=[('disabled',fg),('active',fg),('!disabled',fg)])
-        tab_fg='#000000' if dark else fg
+        tab_fg=fg
         style.configure('TNotebook.Tab',foreground=tab_fg)
         style.map('TNotebook.Tab',foreground=[('disabled',tab_fg),('selected',tab_fg),('active',tab_fg),('!disabled',tab_fg)])
         style.map('TButton',background=[('active','#424242' if dark else '#e2e7ef')])
@@ -596,12 +596,47 @@ class StudioApp:
         style.configure('Accent.TButton',background='#424242' if dark else '#3678dc',foreground='white')
         style.map('Accent.TButton',background=[('active','#505050' if dark else '#245eb7')])
         style.configure('Muted.TLabel',foreground=fg)
+        self.paint_ttk(style,dark,bg,fg,field)
         if self.account_window:
             self.account_window.configure(bg=bg)
             for child in self.account_window.winfo_children():
                 if isinstance(child,tk.Canvas):child.configure(bg=bg)
 
         theme_widgets(self.root)
+
+    def paint_ttk(self,style,dark,bg,fg,field):
+        """Darken clam's remaining light borders, troughs and indicators; light mode restores clam's own values."""
+        saved=self.__dict__.setdefault('_clam_light',{})
+        edge,lit,shade,trough,thumb,hover='#505050','#424242','#303030','#171717','#424242','#505050'
+        def paint(name,options=None,maps=None,light=None):
+            for option in options or {}:
+                if (name,option) not in saved:saved[(name,option)]=style.lookup(name,option)
+            for option in maps or {}:
+                if (name,option,'map') not in saved:saved[(name,option,'map')]=style.map(name,query_opt=option)
+            if dark:
+                if options:style.configure(name,**options)
+                if maps:style.map(name,**maps)
+            else:
+                values={option:(light or {}).get(option,saved[(name,option)]) for option in options or {}}
+                if values:style.configure(name,**{k:v for k,v in values.items() if v})
+                for option in maps or {}:
+                    value=saved[(name,option,'map')] or saved.get(('.',option,'map'))
+                    if value:style.map(name,**{option:value})
+        frame={'bordercolor':edge,'lightcolor':lit,'darkcolor':shade}
+        paint('.',maps={'background':[('disabled',bg),('active',thumb)]})
+        for name in ('TButton','TEntry','TCombobox','TSpinbox','TScrollbar','TScale','Treeview','Treeview.Heading','TCheckbutton','TRadiobutton','TLabelframe','TNotebook','TSeparator'):
+            paint(name,frame)
+        paint('TNotebook.Tab',{**frame,'background':field},{'background':[('selected',thumb),(field,)],'lightcolor':[('selected',lit),(shade,)]})
+        paint('TButton',maps={'lightcolor':[('pressed',shade)],'darkcolor':[('pressed',shade)]})
+        paint('TScrollbar',{'troughcolor':trough,'arrowcolor':fg},{'background':[('disabled',shade),('active',hover),(thumb,)]},light={'arrowcolor':'#000000'})
+        paint('TScale',{'troughcolor':trough},{'background':[('disabled',thumb),('active','#6a6a6a'),(hover,)]})
+        paint('TSeparator',maps={'background':[(edge,)]})
+        paint('TCombobox',maps={'background':[('active',hover),('pressed',hover),(thumb,)],'bordercolor':[('focus',hover)]})
+        paint('TSpinbox',{'fieldbackground':field,'arrowcolor':fg},{'background':[('readonly',field),(thumb,)],'bordercolor':[('focus',hover)]},light={'fieldbackground':'#ffffff','arrowcolor':'#000000'})
+        paint('TEntry',maps={'background':[('readonly',field)],'bordercolor':[('focus',hover)],'lightcolor':[('focus',edge)]})
+        paint('Treeview.Heading',maps={'background':[('active',thumb)]})
+        for name in ('TCheckbutton','TRadiobutton'):
+            paint(name,{'indicatorbackground':field,'indicatorforeground':fg},{'indicatorbackground':[('pressed',thumb),('disabled',bg)],'indicatorforeground':[('disabled','#999999')]})
 
     def export_settings(self):
         path=filedialog.asksaveasfilename(parent=self.root,defaultextension='.json',initialfile='NicoLive-settings.json')

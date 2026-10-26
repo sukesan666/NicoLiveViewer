@@ -27,7 +27,10 @@ def theme_widgets(window):
         if isinstance(widget,(tk.Tk,tk.Toplevel)):
             widget.configure(bg=bg);title_theme(widget,dark)
         elif isinstance(widget,tk.Canvas):widget.configure(bg=bg)
-        elif isinstance(widget,tk.Text):widget.configure(bg='#303030' if dark else '#ffffff',fg=fg,insertbackground=fg,selectbackground='#505050',selectforeground='#ffffff')
+        elif isinstance(widget,tk.Text):
+            if not hasattr(widget,'_light_edge'):widget._light_edge=(widget.cget('highlightbackground'),widget.cget('highlightcolor'),widget.cget('relief'))
+            widget.configure(bg='#303030' if dark else '#ffffff',fg=fg,insertbackground=fg,selectbackground='#505050',selectforeground='#ffffff')
+            widget.configure(highlightbackground='#505050',highlightcolor='#505050',relief='flat') if dark else widget.configure(highlightbackground=widget._light_edge[0],highlightcolor=widget._light_edge[1],relief=widget._light_edge[2])
         elif isinstance(widget,(ttk.Label,ttk.LabelFrame)):widget.configure(foreground=fg) if isinstance(widget,ttk.Label) else None
         for child in widget.winfo_children():visit(child)
     visit(window)

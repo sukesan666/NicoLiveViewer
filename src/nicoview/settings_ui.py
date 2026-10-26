@@ -2,6 +2,7 @@
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk,filedialog,messagebox
+from tkinter import font as tkfont
 from .settings import clean_settings
 from .layout import fit_window, ScrollPage
 
@@ -15,23 +16,23 @@ class SettingsDialog(tk.Toplevel):
         pages={name:pane.inner for name,pane in panes.items()}
         for name,pane in panes.items(): notebook.add(pane,text=name); pane.inner.columnconfigure(1,weight=1)
         self._choice(pages['再生・コメント'],'ui_scale','画面の拡大率 ％（再起動後に適用）',tuple(str(n) for n in range(100,251,10)))
-        self._entry(pages['再生・コメント'],'font','コメントのフォント')
+        self._font(pages['再生・コメント'],'font','コメントのフォント')
         self._check(pages['再生・コメント'],'enabled','コメントを表示')
-        self._entry(pages['再生・コメント'],'delay','コメント受信待機 秒 (0–30)')
-        self._entry(pages['再生・コメント'],'size','文字サイズ (12–96)')
-        self._entry(pages['再生・コメント'],'fps','コメント FPS (1–240)')
+        self._slider(pages['再生・コメント'],'delay','コメント受信待機 秒',0,30,.5)
+        self._slider(pages['再生・コメント'],'size','文字サイズ',12,96)
+        self._slider(pages['再生・コメント'],'fps','コメント FPS',1,240)
         self._choice(pages['再生・コメント'],'theme','テーマ',('dark','light'))
-        self._entry(pages['再生・コメント'],'volume','音量 (0–100)')
+        self._slider(pages['再生・コメント'],'volume','音量',0,100)
         self._check(pages['再生・コメント'],'muted','消音')
         self._choice(pages['再生・コメント'],'quality','画質',('best','worst','high','normal','low','audio_only','1080p','720p','480p','360p'))
-        self._entry(pages['再生・コメント'],'comment_offset','コメント時間補正 秒 (負数は早める)')
+        self._slider(pages['再生・コメント'],'comment_offset','コメント時間補正 秒 (負数は早める)',-60,60,.5)
         for key,label in [('ng_words','NGワード（1行に1件）'),('ng_users','NGユーザーID（1行に1件）')]:
             page=pages['再生・コメント']; row=page.grid_size()[1]
             ttk.Label(page,text=label).grid(row=row,column=0,sticky='nw',pady=5)
             box=tk.Text(page,height=3,width=32); box.grid(row=row,column=1,sticky='ew',pady=5); box.insert('1.0','\n'.join(self.settings[key])); self.texts[key]=box
         page=pages['録画・動作']
         self._entry(page,'recording_dir','録画先',directory=True)
-        self._entry(page,'max_jobs','同時処理数 (1–16)')
+        self._slider(page,'max_jobs','同時処理数',1,16)
         self._entry(page,'player_path','mpv 実行ファイル',file=True)
         self._entry(page,'ffmpeg_path','FFmpeg 実行ファイル',file=True)
         self._check(page,'svp_enabled','最初の再生だけ SVP を利用')
@@ -43,8 +44,8 @@ class SettingsDialog(tk.Toplevel):
         page=pages['通知']
         self._entry(page,'sound_play','予約再生の開始音 (PCM WAV)',file=True)
         self._entry(page,'sound_record','予約録画の開始音 (PCM WAV)',file=True)
-        self._entry(page,'sound_volume','通知音量 (0–100)')
-        self._entry(page,'notification_group_seconds','連続通知をまとめる秒数 (0–300)')
+        self._slider(page,'sound_volume','通知音量',0,100)
+        self._slider(page,'notification_group_seconds','連続通知をまとめる秒数',0,300)
         self._check(page,'quiet_enabled','指定時間は通知音を鳴らさない')
         self._entry(page,'quiet_start','開始時刻 (HH:MM)'); self._entry(page,'quiet_end','終了時刻 (HH:MM)')
         testbar=ttk.Frame(page); testbar.grid(row=page.grid_size()[1],column=0,columnspan=3,sticky='w',pady=8)
@@ -65,6 +66,24 @@ class SettingsDialog(tk.Toplevel):
                 value=filedialog.askdirectory(parent=self) if directory else filedialog.askopenfilename(parent=self)
                 if value: variable.set(value)
             ttk.Button(page,text='参照',command=choose).grid(row=row,column=2,padx=5)
+    def _slider(self,page,key,label,low,high,step=1):
+        row=page.grid_size()[1]; digits=0 if step==1 else 1
+        current=float(self.settings[key]); low=min(low,current); high=max(high,current)
+        variable=tk.DoubleVar(value=current); self.variables[key]=variable
+        ttk.Label(page,text=label).grid(row=row,column=0,sticky='w',pady=5,padx=(0,12))
+        box=ttk.Frame(page); box.grid(row=row,column=1,sticky='ew',pady=5); box.columnconfigure(0,weight=1)
+        shown=tk.StringVar(value=f'{current:.{digits}f}')
+        def moved(value):
+            rounded=round(round(float(value)/step)*step,digits); variable.set(rounded); shown.set(f'{rounded:.{digits}f}')
+        ttk.Scale(box,from_=low,to=high,variable=variable,command=moved).grid(row=0,column=0,sticky='ew')
+        ttk.Label(box,textvariable=shown,width=7,anchor='e').grid(row=0,column=1,padx=(10,0))
+    def _font(self,page,key,label):
+        row=page.grid_size()[1]; fonts=sorted({f for f in tkfont.families(self) if not f.startswith('@')})
+        name=self.settings[key]
+        if name not in fonts: name='Meiryo' if 'Meiryo' in fonts else (fonts[0] if fonts else name)
+        v=tk.StringVar(value=name); self.variables[key]=v
+        ttk.Label(page,text=label).grid(row=row,column=0,sticky='w',pady=5,padx=(0,12))
+        ttk.Combobox(page,textvariable=v,values=fonts,state='readonly',height=15).grid(row=row,column=1,sticky='ew',pady=5)
     def _check(self,page,key,label):
         v=tk.BooleanVar(value=self.settings[key]); self.variables[key]=v
         ttk.Checkbutton(page,text=label,variable=v).grid(row=page.grid_size()[1],column=0,columnspan=3,sticky='w',pady=6)
