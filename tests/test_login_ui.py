@@ -47,8 +47,20 @@ class LoginUITests(unittest.TestCase):
             restored=App(another,Path(self.tmp.name)/'restart'/'settings.json')
         try:
             self.assertTrue(restored.login.get())
+            self.assertTrue(restored.remember.get()) # Saved session shows the save box checked.
             self.assertEqual(restored.browser_session,cookies)
         finally:restored.close()
+
+    def test_browser_login_checks_save_box_and_unchecking_stops_persisting(self):
+        self.app.session_store=MagicMock()
+        cookies=[{'name':'user_session','value':'synthetic','domain':'.nicovideo.jp','expires':None}]
+        self.app.browser_result(self.app.browser_generation,('success',cookies))
+        self.assertTrue(self.app.remember.get())
+        self.app.remember.set(False);self.app.toggle_remember()
+        self.app.session_store.delete.assert_called_once()
+        self.assertEqual(self.app.browser_session,cookies) # Still logged in for this run.
+        self.app.remember.set(True);self.app.toggle_remember()
+        self.assertEqual(self.app.session_store.save.call_count,2)
 
     def test_opt_in_saved_only_after_success(self):
         self.app.remember.set(True);self.app.start()

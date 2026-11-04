@@ -92,6 +92,27 @@ class MediaRegressions(unittest.TestCase):
         worker._watch_player();self.assertEqual(events,[])
         worker.player=None;worker.close()
 
+    def test_stalled_playback_triggers_reconnect_error_unless_paused(self):
+        events=[];worker=Worker(events.append);worker.seekable=False;worker.stall_timeout=0.15
+        worker.proxy=object();worker.player=MagicMock();worker.player.poll.return_value=None
+        worker.ipc=PlayerIPC('unused')
+        worker.ipc._consume(b'{"event":"property-change","name":"pause","data":false}\n')
+        worker.ipc._consume(b'{"event":"property-change","name":"time-pos","data":10.0}\n')
+        worker._watch_player()
+        self.assertTrue(worker.stop.is_set())
+        self.assertTrue(any(e['type']=='error' and '再生が停止しました' in e.get('text','') for e in events),events)
+        worker.player=None;worker.ipc=None;worker.close()
+
+        events=[];worker=Worker(events.append);worker.seekable=False;worker.stall_timeout=0.15
+        worker.proxy=object();worker.player=MagicMock();worker.player.poll.return_value=None
+        worker.ipc=PlayerIPC('unused')
+        worker.ipc._consume(b'{"event":"property-change","name":"pause","data":true}\n')
+        worker.ipc._consume(b'{"event":"property-change","name":"time-pos","data":10.0}\n')
+        threading.Thread(target=lambda:(time.sleep(0.25),worker.stop.set()),daemon=True).start()
+        worker._watch_player()
+        self.assertEqual(events,[])
+        worker.player=None;worker.ipc=None;worker.close()
+
     def test_interrupted_both_remains_unsuccessful_after_player_stop(self):
         import io
         import tempfile

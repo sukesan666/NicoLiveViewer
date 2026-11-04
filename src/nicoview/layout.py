@@ -84,14 +84,35 @@ def frame_size(window):
     return 16,40
 
 
+class AutoScrollbar(ttk.Scrollbar):
+    """A grid-managed scrollbar that takes space only while content overflows."""
+    def set(self,first,last):
+        super().set(first,last)
+        if float(first)<=0 and float(last)>=1:
+            if self.winfo_manager():self.grid_remove()
+        elif not self.winfo_manager():self.grid()
+
+
+class ScrollableTree(ttk.Frame):
+    """A flexible list with its optional scrollbar kept beside the viewport."""
+    def __init__(self,master,**options):
+        super().__init__(master)
+        self.columnconfigure(0,weight=1);self.rowconfigure(0,weight=1)
+        options.setdefault('height',1)
+        self.tree=ttk.Treeview(self,**options)
+        self.scrollbar=AutoScrollbar(self,orient='vertical',command=self.tree.yview)
+        self.tree.configure(yscrollcommand=self.scrollbar.set)
+        self.tree.grid(row=0,column=0,sticky='nsew')
+        self.scrollbar.grid(row=0,column=1,sticky='ns')
+        self.scrollbar.grid_remove()
+
+
 class ScrollPage(ttk.Frame):
     def __init__(self,master):
         super().__init__(master)
         self.columnconfigure(0,weight=1);self.rowconfigure(0,weight=1)
         self.canvas=tk.Canvas(self,highlightthickness=0)
         self.canvas.grid(row=0,column=0,sticky='nsew')
-        ttk.Scrollbar(self,orient='vertical',command=self.canvas.yview).grid(row=0,column=1,sticky='ns')
-        ttk.Scrollbar(self,orient='horizontal',command=self.canvas.xview).grid(row=1,column=0,sticky='ew')
         self.inner=ttk.Frame(self.canvas,padding=16)
         self.item=self.canvas.create_window(0,0,window=self.inner,anchor='nw')
         self.inner.bind('<Configure>',self.refresh)

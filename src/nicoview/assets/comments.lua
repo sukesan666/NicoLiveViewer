@@ -17,6 +17,14 @@ end
 local comments = {}
 local duration = 8
 
+-- Keep layout in 720p coordinates so fonts, lanes, borders and active comments
+-- scale together when the player is resized or switched to fullscreen.
+local function comment_canvas()
+    local w,h = mp.get_osd_size()
+    if not w or w<=0 or not h or h<=0 then return nil end
+    return w*720/h, 720
+end
+
 local function video_info()
     local found=false
     for _,f in ipairs(mp.get_property_native('vf',{})) do
@@ -51,8 +59,8 @@ end)
 
 mp.register_script_message('nico-comment', function(text, color)
     if not config.enabled or #comments >= 100 then return end
-    local w,h = mp.get_osd_size()
-    if not w or w<=0 or not h or h<=0 then return end
+    local w,h = comment_canvas()
+    if not w then return end
     color = tostring(color or 'FFFFFF'):upper()
     if not color:match('^%x%x%x%x%x%x$') then color='FFFFFF' end
     -- ASS color order is BGR, while NDGR and IPC use RGB.
@@ -92,8 +100,8 @@ mp.register_event('seek', function() comments={}; overlay:remove() end)
 
 local function render_comments()
     if not config.enabled or #comments==0 then overlay:remove(); return end
-    local w,h=mp.get_osd_size()
-    if not w or w<=0 or not h or h<=0 then return end
+    local w,h=comment_canvas()
+    if not w then return end
     local now=comment_time(); local a=assdraw.ass_new(); local keep={}
     for _,c in ipairs(comments) do
         if now-c.at<duration then

@@ -5,8 +5,8 @@ from pathlib import Path
 
 DEFAULTS = {'font':'Meiryo','size':28,'delay':0.0,'enabled':True,'player_path':'','ffmpeg_path':'',
  'svp_enabled':False,'svp_player_path':'','fps':120,'theme':'dark','ui_scale':100,'volume':100,'muted':False,
- 'quality':'best','ng_words':[],'ng_users':[],'comment_offset':0.0,'recording_dir':'',
- 'max_jobs':4,'reconnect':True,'inhibit_sleep':False,'startup':False,'tray':False,
+ 'quality':'best','language':'ja','ng_words':[],'ng_users':[],'comment_offset':0.0,'recording_dir':'',
+ 'max_jobs':16,'reconnect':True,'inhibit_sleep':False,'startup':False,'tray':False,
  'sound_play':'','sound_record':'','sound_volume':80,'quiet_enabled':False,'quiet_start':'22:00',
  'quiet_end':'07:00','notification_group_seconds':5,'first_run_complete':False}
 
@@ -28,6 +28,7 @@ def clean_settings(values, fonts=None):
     for key in ('enabled','svp_enabled','muted','reconnect','inhibit_sleep','startup','tray','quiet_enabled','first_run_complete'):
         if isinstance(values.get(key),bool): result[key]=values[key]
     if values.get('theme') in ('dark','light'): result['theme']=values['theme']
+    if values.get('language') in ('ja','en'): result['language']=values['language']
     if str(values.get('ui_scale')) in tuple(str(n) for n in range(100,251,10)): result['ui_scale']=int(values['ui_scale'])
     quality=values.get('quality')
     if quality in ('best','worst','high','normal','low','audio_only','1080p','720p','480p','360p'): result['quality']=quality

@@ -26,11 +26,14 @@ credentials.dat*
 .env.*
 cookies.txt*
 cookies.json*
+push-session.json*
+push-follows.json*
 nicoview-login-*/
 browser-profile/
 
 # Local recordings and external runtimes; keep bundled preview assets.
 recordings/
+/thumbnails/
 player/
 ffmpeg/
 *.ts
@@ -46,3 +49,7 @@ ffmpeg/
 /progress.md
 /docs/superpowers/
 /publish-files.json
+/.test-tmp/
+/scratch_*.html
+/.agents/
+/.codex/

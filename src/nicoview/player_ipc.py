@@ -62,7 +62,7 @@ class PlayerIPC:
                     self.events=self.events[-100:]
 
     def observe(self):
-        for i,name in enumerate(('time-pos','duration','pause','seekable','eof-reached','volume','mute'),1):
+        for i,name in enumerate(('time-pos','duration','pause','seekable','eof-reached','volume','mute','paused-for-cache','core-idle'),1):
             self.send(['observe_property',i,name])
 
     def snapshot(self):

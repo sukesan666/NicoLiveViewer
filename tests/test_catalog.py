@@ -1,3 +1,6 @@
+import os
+import time
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 from nicoview.catalog import Catalog, CatalogError, normalize, parse_page
@@ -16,6 +19,20 @@ class CatalogTests(unittest.TestCase):
         c=Catalog([])
         for url in ['https://evil.test/watch/lv1','https://live.nicovideo.jp.evil.test/watch/lv1','file:///lv1']:
             with self.assertRaises(CatalogError):c.program(url)
+
+    def test_search_tag_and_provider_parameters(self):
+        c=Catalog([])
+        calls=[]
+        def page(path,params):
+            calls.append((path,params))
+            return {'searchResult':{'statusData':{params['status']:{'programs':[
+                {'nicoliveProgramId':'lv1','beginTime':100,'providerType':'official'}]}}}}
+        with patch.object(c,'_page',side_effect=page):
+            res=c.search('アニメ',is_tag=True,provider='official')
+            self.assertEqual(len(res),1)
+            self.assertEqual(calls[0][1].get('isTagSearch'),'true')
+            self.assertEqual(calls[0][1].get('providerTypes'),'official')
+        c.close()
 
     def test_page_schemas(self):
         self.assertEqual(parse_page('<script id="embedded-data" data-props="{&quot;program&quot;:{}}"></script>'),{'program':{}})
@@ -94,10 +111,46 @@ class CatalogTests(unittest.TestCase):
             with self.assertRaises(CatalogError):c.official_week()
         c.close()
 
+    def test_thumbnail_cache_and_cleanup(self):
+        import tempfile
+        from nicoview import catalog
+        with tempfile.TemporaryDirectory() as td:
+            with patch.object(catalog,'app_dir',return_value=Path(td)):
+                d=catalog.thumbnail_dir()
+                self.assertTrue(d.is_dir())
+                # Fake an old file older than 30 days
+                old_file=d/'old.png'
+                old_file.write_bytes(b'old')
+                old_time=time.time()-35*86400
+                os.utime(old_file,(old_time,old_time))
+                catalog._CLEANED_THUMBS=False
+                catalog.clean_old_thumbnails(30)
+                time.sleep(0.1) # thread finish
+                self.assertFalse(old_file.exists())
+
     def test_personal_lists_require_actual_login(self):
         c=Catalog([])
         with patch.object(c,'_page',return_value={'user':{'isLoggedIn':False},'view':{}}):
             with self.assertRaises(CatalogError):c.following()
+
+    def test_followed_channels_parsing(self):
+        c = Catalog([])
+        sample_html = '''
+        <ul class="items">
+          <li class="item">
+            <a href="/ch2650313" class="channel_name">テストチャンネル</a>
+            <img src="https://example.com/icon.jpg" alt="テストチャンネル">
+            <span class="channel_detail">詳細説明</span>
+          </li>
+        </ul>
+        '''
+        with patch.object(c, '_read', return_value=sample_html):
+            channels = c.followed_channels(limit_pages=1)
+            self.assertEqual(len(channels), 1)
+            self.assertEqual(channels[0]['channel_id'], 'ch2650313')
+            self.assertEqual(channels[0]['title'], 'テストチャンネル')
+            self.assertEqual(channels[0]['thumbnail_url'], 'https://example.com/icon.jpg')
+            self.assertEqual(channels[0]['description'], '詳細説明')
 
 
 if __name__=='__main__':unittest.main()

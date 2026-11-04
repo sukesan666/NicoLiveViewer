@@ -90,17 +90,77 @@ class TrayIcon:
 
     Uses the existing Tk HWND, polling callback messages by subclassing its
     window procedure. No persistent process or global user settings.
+
+    The window procedure runs inside Tcl_DoOneEvent while tkinter has released
+    the GIL. Calling any tkinter API from there aborts Python (PyEval_RestoreThread
+    fatal error), so the procedure only records the click; a Tk timer handles it.
     """
+    WM_CONTEXTMENU=0x007B; WM_LBUTTONUP=0x0202; WM_LBUTTONDBLCLK=0x0203; WM_RBUTTONUP=0x0205
+    NIN_SELECT=0x0400; NIN_KEYSELECT=0x0401
     def __init__(self,on_show,on_quit,root=None):
         self.on_show=on_show; self.on_quit=on_quit; self.root=root
         self.active=False; self._old=None; self._proc=None
-        self._owned_icon=None
+        self._owned_icon=None; self._pending=[]; self._poll_id=None; self._menu_open=False
+    def _record(self,lparam):
+        event=lparam&0xFFFF
+        if event in (self.WM_LBUTTONUP,self.WM_LBUTTONDBLCLK,self.NIN_SELECT,self.NIN_KEYSELECT):self._pending.append('show')
+        elif event in (self.WM_RBUTTONUP,self.WM_CONTEXTMENU):self._pending.append('menu')
+    def _poll(self):
+        self._poll_id=None
+        if not self.active:return
+        actions=set()
+        while self._pending:actions.add(self._pending.pop(0))
+        try:
+            if 'menu' in actions:self.show_menu()
+            elif 'show' in actions and self.on_show:self.on_show()
+        finally:
+            if self.active and self.root is not None:
+                try:self._poll_id=self.root.after(100,self._poll)
+                except Exception:self._poll_id=None
+    def show_menu(self):
+        if self._menu_open:return
+        self._menu_open=True
+        cmd=0
+        try:
+            user=ctypes.windll.user32
+            user.CreatePopupMenu.restype=wintypes.HMENU; user.CreatePopupMenu.argtypes=[]
+            user.AppendMenuW.restype=wintypes.BOOL
+            user.AppendMenuW.argtypes=[wintypes.HMENU,wintypes.UINT,ctypes.c_size_t,wintypes.LPCWSTR]
+            user.TrackPopupMenuEx.restype=wintypes.UINT
+            user.TrackPopupMenuEx.argtypes=[wintypes.HMENU,wintypes.UINT,ctypes.c_int,ctypes.c_int,wintypes.HWND,ctypes.c_void_p]
+            user.DestroyMenu.restype=wintypes.BOOL; user.DestroyMenu.argtypes=[wintypes.HMENU]
+            user.SetForegroundWindow.restype=wintypes.BOOL; user.SetForegroundWindow.argtypes=[wintypes.HWND]
+            user.PostMessageW.restype=wintypes.BOOL
+            user.PostMessageW.argtypes=[wintypes.HWND,wintypes.UINT,wintypes.WPARAM,wintypes.LPARAM]
+            class POINT(ctypes.Structure):
+                _fields_=[('x',wintypes.LONG),('y',wintypes.LONG)]
+            user.GetCursorPos.restype=wintypes.BOOL; user.GetCursorPos.argtypes=[ctypes.POINTER(POINT)]
+            hMenu=user.CreatePopupMenu()
+            if not hMenu:return
+            from .i18n import tr
+            try:
+                user.AppendMenuW(hMenu,0x0000,1,tr('表示する'))
+                user.AppendMenuW(hMenu,0x0800,0,None)
+                user.AppendMenuW(hMenu,0x0000,2,tr('アプリを終了する'))
+                pt=POINT(); user.GetCursorPos(ctypes.byref(pt))
+                # Required so the menu closes when clicking elsewhere.
+                user.SetForegroundWindow(self.hwnd)
+                cmd=user.TrackPopupMenuEx(hMenu,0x0002|0x0100,pt.x,pt.y,self.hwnd,None)
+                user.PostMessageW(self.hwnd,0,0,0)
+            finally:
+                user.DestroyMenu(hMenu)
+        finally:
+            self._menu_open=False
+        self._pending.clear()  # clicks made while the menu was open
+        if cmd==1 and self.on_show:self.on_show()
+        elif cmd==2 and self.on_quit:self.on_quit()
     def start(self):
         if self.active: return True
         if sys.platform!='win32': return False
         import tkinter
         root=self.root or tkinter._default_root
         if root is None: raise RuntimeError('Tray requires a Tk root')
+        self.root=root
         root.update_idletasks()
         user=ctypes.windll.user32
         user.GetParent.argtypes=[wintypes.HWND]; user.GetParent.restype=wintypes.HWND
@@ -108,9 +168,10 @@ class TrayIcon:
         class NOTIFYICONDATA(ctypes.Structure):
             _fields_=[('cbSize',wintypes.DWORD),('hWnd',wintypes.HWND),('uID',wintypes.UINT),('uFlags',wintypes.UINT),('uCallbackMessage',wintypes.UINT),('hIcon',wintypes.HICON),('szTip',wintypes.WCHAR*128),('dwState',wintypes.DWORD),('dwStateMask',wintypes.DWORD),('szInfo',wintypes.WCHAR*256),('uTimeoutOrVersion',wintypes.UINT),('szInfoTitle',wintypes.WCHAR*64),('dwInfoFlags',wintypes.DWORD),('guidItem',ctypes.c_byte*16),('hBalloonIcon',wintypes.HICON)]
         self.data=NOTIFYICONDATA(); self.data.cbSize=ctypes.sizeof(self.data); self.data.hWnd=self.hwnd
-        self.data.uID=1; self.data.uFlags=7; self.data.uCallbackMessage=0x8000+81
+        # NIF_MESSAGE|NIF_ICON only: no NIF_TIP/NIF_SHOWTIP, so no hover tooltip.
+        self.data.uID=1; self.data.uFlags=0x01|0x02; self.data.uCallbackMessage=0x8000+81
         user.LoadIconW.argtypes=[wintypes.HINSTANCE,ctypes.c_void_p]; user.LoadIconW.restype=wintypes.HICON
-        self.data.hIcon=user.LoadIconW(None,ctypes.c_void_p(32512)); self.data.szTip='NicoLive Studio — 左クリックで表示 / 右クリックで終了'
+        self.data.hIcon=user.LoadIconW(None,ctypes.c_void_p(32512)); self.data.szTip=''
         from .playback import asset_path
         icon=asset_path('studio.ico')
         if icon.is_file():
@@ -123,22 +184,35 @@ class TrayIcon:
         setter=user.SetWindowLongPtrW if ctypes.sizeof(ctypes.c_void_p)==8 else user.SetWindowLongW
         setter.argtypes=[wintypes.HWND,ctypes.c_int,ctypes.c_void_p]; setter.restype=ctypes.c_void_p
         self._setter=setter
+        callback_message=self.data.uCallbackMessage
         def callback(hwnd,msg,wparam,lparam):
-            if msg==self.data.uCallbackMessage:
-                if lparam==0x0202: root.after_idle(self.on_show)
-                elif lparam==0x0205: root.after_idle(self.on_quit)
+            if msg==callback_message:
+                # Never touch tkinter here (see class docstring).
+                self._record(lparam)
                 return 0
             return user.CallWindowProcW(self._old,hwnd,msg,wparam,lparam)
         self._proc=PROC(callback); self._old=setter(self.hwnd,-4,ctypes.cast(self._proc,ctypes.c_void_p))
         if not self._old:
             self._release_icon();raise OSError('通知領域の操作を登録できません')
-        if not ctypes.windll.shell32.Shell_NotifyIconW(0,ctypes.byref(self.data)):
-            setter(self.hwnd,-4,self._old);self._release_icon();raise OSError('トレイアイコンを作成できません')
-        self.active=True; return True
+        shell=ctypes.windll.shell32
+        shell.Shell_NotifyIconW(2,ctypes.byref(self.data))
+        if not shell.Shell_NotifyIconW(0,ctypes.byref(self.data)):
+            setter(self.hwnd,-4,self._old);self._old=None;self._release_icon();raise OSError('トレイアイコンを作成できません')
+        # NOTIFYICON_VERSION_4 suppresses the standard tooltip unless NIF_SHOWTIP is set.
+        self.data.uTimeoutOrVersion=4
+        shell.Shell_NotifyIconW(4,ctypes.byref(self.data))
+        self.active=True; self._pending.clear()
+        self._poll_id=root.after(100,self._poll)
+        return True
     def stop(self):
+        if self._poll_id is not None and self.root is not None:
+            try:self.root.after_cancel(self._poll_id)
+            except Exception:pass
+            self._poll_id=None
         if self.active:
             ctypes.windll.shell32.Shell_NotifyIconW(2,ctypes.byref(self.data))
-            self._setter(self.hwnd,-4,self._old); self.active=False
+            if self._old:self._setter(self.hwnd,-4,self._old);self._old=None
+            self.active=False
         self._release_icon()
     def _release_icon(self):
         if self._owned_icon:

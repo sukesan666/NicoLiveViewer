@@ -74,6 +74,7 @@ class Worker:
         self.media_started=None;self.begin_time=0;self.open_time=0
         self.ready_sent=False
         self.playback_finished=threading.Event()
+        self.stall_timeout=12.0
 
     def event(self,kind, text=None, **values):
         e={'type':kind,'request_id':self.current}
@@ -200,14 +201,30 @@ class Worker:
 
     def _watch_player(self):
         player=self.player;stop=self.stop;ipc=self.ipc
+        last_pos=None;last_progress=time.monotonic()
         while not stop.wait(.1):
             events=ipc.take_events() if ipc else []
             ending=next((e for e in events if e.get('event')=='end-file'),None)
             exited=player.poll() is not None
-            if ending or exited:
+            stalled=False
+            if not ending and not exited and ipc and self.proxy is not None and not self.recording:
+                state=ipc.snapshot()
+                now=time.monotonic()
+                if state.get('pause') is True or any(e.get('event') in ('seek','playback-restart') for e in events):
+                    last_progress=now
+                else:
+                    pos=state.get('time-pos')
+                    if isinstance(pos,(int,float)) and math.isfinite(pos):
+                        if last_pos is None or abs(pos-last_pos)>1e-3:
+                            last_pos=pos;last_progress=now
+                        elif now-last_progress>=self.stall_timeout:
+                            stalled=True
+                    elif (last_pos is not None or state.get('paused-for-cache') is True or state.get('core-idle') is True) and now-last_progress>=self.stall_timeout:
+                        stalled=True
+            if ending or exited or stalled:
                 reason=ending.get('reason') if ending else None
-                user_closed=reason in ('quit','stop') or (ending is None and exited and player.returncode==0)
-                self.player_completed=bool(self.seekable and reason=='eof')
+                user_closed=not stalled and (reason in ('quit','stop') or (ending is None and exited and player.returncode==0))
+                self.player_completed=bool(not stalled and self.seekable and reason=='eof')
                 self.playback_finished.set()
                 if self.player_completed and self.mode=='both':
                     # A VOD player can reach EOF while recording/comment downloads
@@ -215,6 +232,8 @@ class Worker:
                     return
                 if user_closed:
                     self.event('player_closed')
+                elif stalled:
+                    self.event('error','再生が停止しました。再接続を確認しています。')
                 elif not self.player_completed:
                     self.event('error','再生接続が終了しました。再接続を確認しています。')
                 stop.set()
