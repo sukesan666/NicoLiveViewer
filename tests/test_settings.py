@@ -26,10 +26,12 @@ class SettingsTests(unittest.TestCase):
     def test_save_allowlist(self):
         with tempfile.TemporaryDirectory() as d:
             p=Path(d)/'settings.json'
-            save_settings(p,{'font':'Meiryo','password':'secret','cookie':'secret','size':33})
+            save_settings(p,{'font':'Meiryo','password':'secret','cookie':'secret','size':33,'hide_anytime':True})
             self.assertNotIn('secret',p.read_text())
             self.assertEqual(load_settings(p)['size'],33)
+            self.assertTrue(load_settings(p)['hide_anytime'])
             p.write_text('invalid'); self.assertEqual(load_settings(p)['size'],28)
+            self.assertFalse(load_settings(p)['hide_anytime'])
 
     def test_comment_queue_delay_bound_clear(self):
         q=OverlayQueue()

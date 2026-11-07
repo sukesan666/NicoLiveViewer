@@ -13,6 +13,8 @@ from datetime import datetime
 from .catalog import Catalog, CatalogError, thumbnail_bytes
 from .thumbnail_cache import THUMBNAIL_LIMIT
 from .layout import fit_window, zoom_container, zoom_factor, ScrollableTree
+import webbrowser
+from .url import web_url_for_item
 
 def thumbnail_png(raw,ffmpeg_path):
     if not raw or len(raw)>2*1024*1024 or not ffmpeg_path or not Path(ffmpeg_path).is_file():return None
@@ -60,6 +62,7 @@ class _Selector:
         self.entry=ttk.Entry(bar,textvariable=self.query);self.entry.pack(side='left',fill='x',expand=True)
         self.entry.bind('<Return>',lambda e:self.request_load(force=True))
         ttk.Button(bar,text=tr('読み込み / 更新'),command=lambda:self.request_load(force=True)).pack(side='left',padx=(8,0))
+        ttk.Button(bar,text=tr('ブラウザで表示'),command=self.open_in_browser).pack(side='left',padx=(6,0))
         self.status=tk.StringVar(value='')
         ttk.Label(content,textvariable=self.status,wraplength=940).pack(fill='x',padx=10,pady=4)
         ttk.Style(self.window).configure('Discovery.Treeview',rowheight=int(62*zoom_factor(self.window)))
@@ -76,6 +79,7 @@ class _Selector:
             self.visible_keys=tuple(children[start:end])
         self.tree.configure(yscrollcommand=scrolled)
         self.tree.bind('<ButtonRelease-1>',self._toggle)
+        self.tree.bind('<Button-3>',self._show_menu)
         self.tree.bind('<space>',self._toggle)
         self.tree.bind('<Double-1>',lambda e:self.choose('play') if not self.schedule else None)
         bottom=ttk.Frame(content);bottom.pack(side='bottom',fill='x',padx=10,pady=10,before=body)
@@ -305,9 +309,62 @@ class _Selector:
         else:self.checked.add(key)
         self.tree.item(key,text=('☑ ' if key in self.checked else '☐ ')+self.rows[key]['title'])
 
-    def choose(self,mode=None):
+    def get_browser_url(self):
+        kind=self.kind;query=self.query.get().strip()
+        from urllib.parse import quote
+        if kind=='official_tag':
+            return f"https://live.nicovideo.jp/search?keyword={quote(query)}&isTagSearch=true&providerTypes=official" if query else "https://live.nicovideo.jp/search"
+        if kind=='keyword':
+            return f"https://live.nicovideo.jp/search?keyword={quote(query)}&providerTypes=official" if query else "https://live.nicovideo.jp/search"
+        if kind=='search':
+            return f"https://live.nicovideo.jp/search?keyword={quote(query)}" if query else "https://live.nicovideo.jp/search"
+        if kind=='url':
+            return web_url_for_item({'url':query}) or 'https://live.nicovideo.jp/'
+        if kind=='followed_channels':
+            return "https://ch.nicovideo.jp/my/following"
+        if kind in ('followed_users','following_live_users'):
+            return "https://www.nicovideo.jp/my/follow/user"
+        if kind=='ranking':
+            return "https://live.nicovideo.jp/ranking"
+        if kind=='official_live':
+            return "https://live.nicovideo.jp/search?status=onair&providerTypes=official"
+        if kind=='official_week':
+            return "https://live.nicovideo.jp/timetable"
+        if kind=='missed':
+            return "https://live.nicovideo.jp/search?status=past"
+        return "https://live.nicovideo.jp/"
+
+    def open_in_browser(self):
+        try:
+            import webbrowser
+            webbrowser.open(self.get_browser_url())
+        except Exception:
+            pass
+
+    def _show_menu(self,event):
+        row=self.tree.identify_row(event.y)
+        if not row:return
+        self.tree.selection_set(row);self.tree.focus(row)
+        p=self.rows.get(row)
+        url=web_url_for_item(p) if p else ''
+        if not url and self.kind in ('official_tag','keyword','search') and self.query.get().strip():
+            url=self.get_browser_url()
+        menu=tk.Menu(self.tree,tearoff=False)
+        if url:
+            menu.add_command(label=tr('既定のブラウザで表示する'),command=lambda u=url:webbrowser.open(u))
+            menu.add_separator()
+        if self.schedule:
+            for label,mode in [(tr('再生＋録画を予約'),'both'),(tr('再生を予約'),'play'),(tr('録画を予約'),'record')]:
+                menu.add_command(label=label,command=lambda m=mode:self.choose(m,row=row))
+        else:
+            for label,mode in [(tr('再生＋録画'),'both'),(tr('録画'),'record'),(tr('再生'),'play')]:
+                menu.add_command(label=label,command=lambda m=mode:self.choose(m,row=row))
+        try:menu.tk_popup(event.x_root,event.y_root)
+        finally:menu.grab_release()
+
+    def choose(self,mode=None,*,row=None):
         mode=mode or self.schedule_mode or 'play'
-        if self.schedule and self.kind in ('keyword','official_tag'):
+        if row is None and self.schedule and self.kind in ('keyword','official_tag'):
             val=self.query.get().strip()
             field='official_tag' if self.kind=='official_tag' else 'keyword'
             label=tr('タグ') if self.kind=='official_tag' else tr('キーワード')
@@ -315,7 +372,9 @@ class _Selector:
                 self.status.set(tr('{0}は1～100文字で入力してください。').format(label));return
             self.on_select({field:val},mode)
             return
-        if self.schedule:
+        if row is not None:
+            keys=(row,)
+        elif self.schedule:
             toggled=[k for k in self.checked if k in self._session_toggled]
             selected=[k for k in self.tree.selection() if k in self.rows]
             keys=selected or toggled or list(self.checked)

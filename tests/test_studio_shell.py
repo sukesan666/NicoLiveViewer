@@ -87,6 +87,20 @@ class ShellTests(unittest.TestCase):
         self.assertEqual(self.app.scheduler.snapshot(),[])
         self.assertTrue(self.app.events.empty())
 
+    def test_stopping_an_idle_reconnect_removes_single_reservation(self):
+        self.app.settings.update(recording_dir=self.temp.name,ffmpeg_path=__file__)
+        program={'url':'https://live.nicovideo.jp/watch/lv1'}
+        ident=self.app.scheduler.add(program,'record')
+        self.assertTrue(self.app.launch(program,'record',schedule_id=ident))
+        job_id,job=next(iter(self.app.jobs.items()))
+        self.app.handle_event(job_id,{'type':'job_ready'})
+        job['controller'].busy=False
+        job['restart_pending']=True
+        self.app.stop_job(job)
+        self.assertEqual(self.app.jobs,{})
+        self.assertEqual(self.app.scheduler.snapshot(),[])
+        self.assertEqual(self.app.store.load_state()['reservations'],[])
+
     def test_clear_execution_history_is_saved_and_recording_continues(self):
         self.app.settings.update(recording_dir=self.temp.name,ffmpeg_path=__file__)
         recording=Path(self.temp.name)/'recording.ts'
@@ -210,6 +224,11 @@ class ShellTests(unittest.TestCase):
         ident=next(iter(self.app.jobs))
         self.app.handle_event(ident,{'type':'job_ready'})
         self.assertEqual(self.app.scheduler.snapshot()[0]['state'],'started')
+        self.assertEqual(self.app.scheduler.snapshot()[0]['message'],'実行中')
+        self.app.handle_event(ident,{'type':'completed','ok':True})
+        self.app.handle_event(ident,{'type':'stopped'})
+        self.assertEqual(self.app.scheduler.snapshot(),[])
+        self.assertEqual(self.app.executions[-1]['status'],'完了')
 
     def test_stale_auth_failure_cannot_clear_new_login(self):
         self.app.account.login.set(True);self.app.account.browser_session=[{'value':'old'}]
@@ -237,8 +256,8 @@ class ShellTests(unittest.TestCase):
         self.app.scheduler.add({'title':'B番組','url':'https://live.nicovideo.jp/watch/lv2','start':2000,'source':'公式タグ：ゲーム'},'record')
         self.app.scheduler.add({'title':'A番組','url':'https://live.nicovideo.jp/watch/lv1','start':3000},'play')
         self.app.executions=[
-            {'time':1000,'title':'Z実行','status':'自動起動しました'},
-            {'time':2000,'title':'A実行','status':'自動録画を開始しました'},
+            {'time':1000,'title':'Z実行','status':'自動起動しました','source':'公式キーワード：アニメ'},
+            {'time':2000,'title':'A実行','status':'自動録画を開始しました','source':'手動'},
         ]
         self.app.open_reservations()
         self.app.sort_reservations('title')
@@ -263,6 +282,9 @@ class ShellTests(unittest.TestCase):
         self.app.sort_executions('time')
         exec_titles=[self.app.execution_tree.item(i,'values')[1] for i in self.app.execution_tree.get_children()]
         self.assertEqual(exec_titles,['Z実行','A実行'])
+        self.app.sort_executions('source')
+        exec_sources=[self.app.execution_tree.item(i,'values')[2] for i in self.app.execution_tree.get_children()]
+        self.assertEqual(exec_sources,['公式キーワード：アニメ','手動'])
 
     def test_tray_minimize_hides_toplevels_and_show_stops_tray_icon(self):
         self.app.settings['tray']=True
@@ -280,5 +302,29 @@ class ShellTests(unittest.TestCase):
             tray.stop.assert_called_once()
             self.assertEqual(self.root.state(),'normal')
             self.assertNotEqual(self.app.reservation_window.state(),'withdrawn')
+
+    def test_hide_anytime_checkbox_filters_reservations(self):
+        self.app.scheduler.add({'title':'特定番組','url':'https://live.nicovideo.jp/watch/lv2','start':2000},'record')
+        self.app.scheduler.add({'title':'ユーザー自動追従','user_id':'12345','start':0},'play')
+        self.app.open_reservations()
+        items=self.app.reservations_tree.get_children()
+        self.assertEqual(len(items),2)
+        starts=[self.app.reservations_tree.item(i,'values')[0] for i in items]
+        self.assertIn('随時',starts)
+
+        # Toggle hide anytime
+        self.app.hide_anytime.set(True)
+        self.app.on_toggle_hide_anytime()
+        filtered_items=self.app.reservations_tree.get_children()
+        self.assertEqual(len(filtered_items),1)
+        self.assertEqual(self.app.reservations_tree.item(filtered_items[0],'values')[2],'特定番組')
+        self.assertTrue(self.app.settings['hide_anytime'])
+
+        # Untoggle hide anytime
+        self.app.hide_anytime.set(False)
+        self.app.on_toggle_hide_anytime()
+        restored_items=self.app.reservations_tree.get_children()
+        self.assertEqual(len(restored_items),2)
+        self.assertFalse(self.app.settings['hide_anytime'])
 
 if __name__=='__main__':unittest.main()

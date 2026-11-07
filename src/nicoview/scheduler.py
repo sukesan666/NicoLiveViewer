@@ -48,14 +48,22 @@ class Scheduler:
         used=set()
         for r in (records if isinstance(records,list) else [])[:500]:
             try:
+                state=r.get('state','waiting')
+                msg=r.get('message')
+                if state=='ended' or (state=='started' and r.get('url') and msg in ('実行中','Running')):
+                    continue
                 ident=self.add(r,r.get('mode','play'),_restore=True)
                 q=self.records[-1]
                 saved_id=str(r.get('id',ident))[:100]
                 q['id']=saved_id if saved_id and saved_id not in used else ident
                 used.add(q['id'])
-                q['state']=r.get('state','waiting') if r.get('state') in ('waiting','started','ended','disabled') else 'waiting'
+                q['state']=state if state in ('waiting','started','disabled') else 'waiting'
                 seen=r.get('seen',[])
                 q['seen']=[str(x)[:100] for x in seen if isinstance(x,str)][-2000:] if isinstance(seen,list) else []
+                if msg:
+                    if msg in ('実行中','Running') and not q.get('url') and (q.get('user_id') or q.get('channel_id')):
+                        q['state']='waiting'
+                    else:q['message']=str(msg)[:300]
             except (ValueError,TypeError,AttributeError):pass
         rules=[r for r in self.records if r.get('keyword') or r.get('official_tag')]
         if rules:
@@ -158,7 +166,7 @@ class Scheduler:
     def keys(self,mode):
         """Program/user keys that already have a reservation covering mode."""
         with self.lock:
-            return {k for k in (reservation_key(r) for r in self.records if r['mode'] in (mode,'both')) if k}
+            return {k for k in (reservation_key(r) for r in self.records if r.get('state')!='ended' and r['mode'] in (mode,'both')) if k}
     def remove_key(self,key,mode):
         """Drop mode from reservations matching key; a 'both' keeps the other mode."""
         if not key:return
@@ -191,6 +199,15 @@ class Scheduler:
             else:
                 r['state']='waiting';r['retry_at']=now+60
                 if not is_rule:r['seen']=[]
+    def finish(self,ident,message=None):
+        with self.lock:
+            r=next((r for r in self.records if r['id']==ident),None)
+            if not r:return
+            if r.get('url'):
+                self.records=[x for x in self.records if x['id']!=ident]
+                self.pending_push.pop(ident,None)
+            elif (r.get('user_id') or r.get('channel_id')) and r['state']=='waiting' and ident not in self.pending_push:
+                r['message']='待機中' if message is None else str(message)[:300]
     def search_due(self,now=None):
         now=time.time() if now is None else now
         return any((r.get('keyword') or r.get('official_tag')) and r['state']=='waiting'

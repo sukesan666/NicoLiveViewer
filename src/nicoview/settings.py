@@ -8,7 +8,7 @@ DEFAULTS = {'font':'Meiryo','size':28,'delay':0.0,'enabled':True,'player_path':'
  'quality':'best','language':'ja','ng_words':[],'ng_users':[],'comment_offset':0.0,'recording_dir':'',
  'max_jobs':16,'reconnect':True,'inhibit_sleep':False,'startup':False,'tray':False,
  'sound_play':'','sound_record':'','sound_volume':80,'quiet_enabled':False,'quiet_start':'22:00',
- 'quiet_end':'07:00','notification_group_seconds':5,'first_run_complete':False}
+ 'quiet_end':'07:00','notification_group_seconds':5,'first_run_complete':False,'hide_anytime':False}
 
 def clean_settings(values, fonts=None):
     result=copy.deepcopy(DEFAULTS)
@@ -25,7 +25,7 @@ def clean_settings(values, fonts=None):
             if math.isfinite(v): result[key]=max(lo,min(hi,v))
         except (TypeError,ValueError,OverflowError): pass
     for key in ('size','fps','volume','max_jobs','sound_volume','notification_group_seconds'): result[key]=int(result[key])
-    for key in ('enabled','svp_enabled','muted','reconnect','inhibit_sleep','startup','tray','quiet_enabled','first_run_complete'):
+    for key in ('enabled','svp_enabled','muted','reconnect','inhibit_sleep','startup','tray','quiet_enabled','first_run_complete','hide_anytime'):
         if isinstance(values.get(key),bool): result[key]=values[key]
     if values.get('theme') in ('dark','light'): result['theme']=values['theme']
     if values.get('language') in ('ja','en'): result['language']=values['language']

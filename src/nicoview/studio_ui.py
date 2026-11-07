@@ -13,6 +13,7 @@ import time
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, simpledialog
 import uuid
+import webbrowser
 
 from .controller import Controller
 from .desktop import SleepInhibitor, TrayIcon, NotificationSound, set_startup
@@ -22,7 +23,7 @@ from .scheduler import Scheduler, reservation_key, JST
 from .settings import clean_settings
 from .settings_ui import SettingsDialog, FirstRunGuide
 from .ui import App as LoginApp, app_dir, find_player
-from .url import normalize_url
+from .url import normalize_url, web_url_for_item
 from . import svp
 from .layout import fit_window, initialize_zoom, zoom_container, zoom_factor, WindowMemory, AutoScrollbar, ScrollableTree
 from .theme_ui import MenuBar, theme_widgets
@@ -91,6 +92,7 @@ class StudioApp:
         self.position=tk.DoubleVar(root,value=0);self.time_label=tk.StringVar(root,value='00:00 / --:--')
         self.volume=tk.IntVar(root,value=self.settings['volume']);self.muted=tk.BooleanVar(root,value=self.settings['muted'])
         self.comments_enabled=tk.BooleanVar(root,value=self.settings['enabled']);self.seeking=False
+        self.hide_anytime=tk.BooleanVar(root,value=bool(self.settings.get('hide_anytime',False)))
         self.build_menu();self.build_body();self.apply_theme()
         root.bind_all('<Map>',lambda e:theme_widgets(e.widget) if isinstance(e.widget,(tk.Tk,tk.Toplevel)) else None,add='+')
         from .playback import asset_path
@@ -176,6 +178,21 @@ class StudioApp:
         for key,label,width in [('mode',tr('操作'),110),('title',tr('番組'),470),('state',tr('状態'),245)]:
             self.tree.heading(key,text=label);self.tree.column(key,width=width,minwidth=70,stretch=key!='mode')
         self.tree.bind('<<TreeviewSelect>>',lambda e:self.refresh_selection())
+        def job_context(event):
+            row=self.tree.identify_row(event.y)
+            if not row:return
+            self.tree.selection_set(row);self.tree.focus(row)
+            job=self.jobs.get(row)
+            url=web_url_for_item(job.get('program',{})) if job else ''
+            if not url and job:url=web_url_for_item({'url':job.get('url','')})
+            menu=tk.Menu(self.tree,tearoff=False)
+            if url:
+                menu.add_command(label=tr('既定のブラウザで表示する'),command=lambda u=url:webbrowser.open(u))
+                menu.add_separator()
+            menu.add_command(label=tr('選択した番組を停止'),command=self.stop_selected)
+            try:menu.tk_popup(event.x_root,event.y_root)
+            finally:menu.grab_release()
+        self.tree.bind('<Button-3>',job_context)
         ttk.Label(footer,textvariable=self.detail,style='Muted.TLabel',wraplength=940).pack(anchor='w',pady=(12,5))
         timeline=ttk.Frame(footer);timeline.pack(fill='x')
         self.seek=ttk.Scale(timeline,from_=0,to=1,variable=self.position,state='disabled')
@@ -301,20 +318,47 @@ class StudioApp:
         retries=self.jobs[ident]['retries']+1 if ident in self.jobs else 0
         ever_ready=bool(self.jobs[ident].get('ever_ready') or self.jobs[ident].get('ready')) if ident in self.jobs else False
         title=str(program.get('title') or (Path(local_path).name if local_path else url) or tr('コメントのテスト'))
+        source=''
+        if schedule_id:
+            rec=next((r for r in self.scheduler.snapshot() if r['id']==schedule_id),None)
+            if rec:
+                source=rec.get('source') or ''
+                if not source:
+                    rules=[r for r in self.scheduler.snapshot() if r.get('keyword') or r.get('official_tag')]
+                    matched=next((rule for rule in rules if rec.get('url') and rec['url'] in rule.get('seen',[])),None)
+                    if matched:source=matched['title']
+                    elif rec.get('user_id') or rec.get('channel_id'):source=rec.get('title') or ''
+                    else:source=tr('手動予約')
+            else:source=tr('手動予約')
+        elif program.get('source'):source=program['source']
+        if not source and replace_ident and replace_ident in self.jobs:
+            source=self.jobs[replace_ident].get('source') or ''
+        if not source:source=tr('手動')
         self.jobs[ident]={'controller':controller,'program':program,'url':url,'title':title,'mode':mode,
             'local_path':local_path,'position':start_time,'duration':0,'seekable':False,'paused':False,
             'settings':settings,'state':tr('接続中'),'post_ready':False,'post':None,'manual_stop':False,
             'retries':retries,'error':False,'completed':False,'preview':preview,'schedule_id':schedule_id,
             'run_key':run_key,'restart_pending':False,
-            'auth_snapshot':credentials,'ready':False,'ever_ready':ever_ready}
+            'auth_snapshot':credentials,'ready':False,'ever_ready':ever_ready,'source':source}
         if self.tree.exists(ident):self.tree.item(ident,values=(tr(MODE[mode]),title,tr('接続中')))
         else:self.tree.insert('',0,iid=ident,values=(tr(MODE[mode]),title,tr('接続中')))
         self.tree.selection_set(ident)
         self.status.set(tr('接続を開始しました。'));self.update_sleep()
         self.execution(self.jobs[ident],tr('開始'));self.save_state();return True
 
-    def execution(self,job,status,reason=''):
-        self.executions.append({'time':time.time(),'title':job['title'],'url':job['url'],'mode':job['mode'],'status':status,'reason':reason[:300]})
+    def execution(self,job,status,reason='',source=None):
+        src=source or job.get('source') or ''
+        if not src and job.get('schedule_id'):
+            rec=next((r for r in self.scheduler.snapshot() if r['id']==job['schedule_id']),None)
+            if rec:
+                src=rec.get('source') or ''
+                if not src and (rec.get('user_id') or rec.get('channel_id')):src=rec.get('title') or ''
+        if not src and job.get('url'):
+            rules=[r for r in self.scheduler.snapshot() if r.get('keyword') or r.get('official_tag')]
+            matched=next((rule for rule in rules if job['url'] in rule.get('seen',[])),None)
+            if matched:src=matched['title']
+        if not src:src=tr('手動')
+        self.executions.append({'time':time.time(),'title':job.get('title',''),'url':job.get('url',''),'mode':job.get('mode','play'),'source':src,'status':status,'reason':reason[:300]})
         self.executions=self.executions[-500:]
 
     def selected(self):
@@ -355,7 +399,14 @@ class StudioApp:
         if job['post']:job['post'].stop()
         if not was_busy and not restarting:
             ident=next((i for i,j in self.jobs.items() if j is job),None)
-            if ident:self.remove_job(ident)
+            if ident:
+                self.finish_job_reservation(job,tr('手動で終了しました。'))
+                self.remove_job(ident)
+
+    def finish_job_reservation(self,job,message):
+        if job.get('schedule_id') and (job['ready'] or job.get('ever_ready') or job.get('manual_stop')):
+            self.scheduler.finish(job['schedule_id'],message)
+            self.save_state();self.refresh_reservations()
 
     def remove_job(self,ident):
         job=self.jobs.pop(ident,None)
@@ -380,6 +431,7 @@ class StudioApp:
         if not job or not job.get('restart_pending') or (job['manual_stop'] and not manual):return
         if job['controller'].busy:self.root.after(300,lambda:self.restart(ident,manual));return
         if not self.launch(job['program'],job['mode'],job['local_path'],job['position'] if job['seekable'] else 0,job['preview'],job['schedule_id'],replace_ident=ident):
+            self.finish_job_reservation(job,tr('終了'))
             self.remove_job(ident)
 
     def open_post(self):
@@ -440,7 +492,10 @@ class StudioApp:
             self.remember(job);self.save_state();self.update_sleep()
             job['controller'].close()
             job['auth_snapshot']=None
-            if not job.get('restart_pending'):self.remove_job(ident)
+            if not job.get('restart_pending'):
+                status_text=tr('完了') if job.get('completed') else (tr('手動で終了しました。') if job.get('manual_stop') else tr('終了'))
+                self.finish_job_reservation(job,status_text)
+                self.remove_job(ident)
         if self.tree.exists(ident):self.tree.item(ident,values=(tr(MODE[job['mode']]),job['title'],tr(job['state'])))
         self.refresh_selection()
 
@@ -767,6 +822,22 @@ class StudioApp:
             self.save_state();self.refresh_reservations()
         remove_button=ttk.Button(reservation_actions,text=tr('選択した予約を削除'),command=remove)
         remove_button.pack(side='left',padx=8)
+        self.hide_anytime_cb=ttk.Checkbutton(reservation_actions,text=tr('随時を表示しない'),variable=self.hide_anytime,command=self.on_toggle_hide_anytime)
+        self.hide_anytime_cb.pack(side='left',padx=12)
+        def reservation_context(event):
+            row=self.reservations_tree.identify_row(event.y)
+            if not row:return
+            self.reservations_tree.selection_set(row);self.reservations_tree.focus(row)
+            rec=next((r for r in self.scheduler.snapshot() if r['id']==row),None)
+            url=web_url_for_item(rec) if rec else ''
+            menu=tk.Menu(self.reservations_tree,tearoff=False)
+            if url:
+                menu.add_command(label=tr('既定のブラウザで表示する'),command=lambda u=url:webbrowser.open(u))
+                menu.add_separator()
+            menu.add_command(label=tr('選択した予約を削除'),command=remove)
+            try:menu.tk_popup(event.x_root,event.y_root)
+            finally:menu.grab_release()
+        self.reservations_tree.bind('<Button-3>',reservation_context)
         def clear_history():
             if book.index('current')!=1 or not self.executions:return
             self.executions.clear();self.save_state();self.refresh_reservations()
@@ -780,11 +851,26 @@ class StudioApp:
                 reservation_actions.pack_forget();history_actions.pack(side='left')
         book.bind('<<NotebookTabChanged>>',show_actions)
         show_actions()
-        executed=ScrollableTree(tabs[1],columns=('time','title','status'),show='headings')
+        executed=ScrollableTree(tabs[1],columns=('time','title','source','status'),show='headings')
         self.execution_tree=executed.tree
-        for k,title,width in [('time',tr('実行日時'),150),('title',tr('番組'),420),('status',tr('結果'),250)]:self.execution_tree.heading(k,text=title,command=lambda col=k:self.sort_executions(col));self.execution_tree.column(k,width=width)
+        for k,title,width in [('time',tr('実行日時'),140),('title',tr('番組'),350),('source',tr('予約元・実行元'),160),('status',tr('結果'),230)]:self.execution_tree.heading(k,text=title,command=lambda col=k:self.sort_executions(col));self.execution_tree.column(k,width=width)
+        def execution_context(event):
+            row=self.execution_tree.identify_row(event.y)
+            if not row:return
+            self.execution_tree.selection_set(row);self.execution_tree.focus(row)
+            url=getattr(self,'_execution_urls',{}).get(row,'')
+            if not url:return
+            menu=tk.Menu(self.execution_tree,tearoff=False)
+            menu.add_command(label=tr('既定のブラウザで表示する'),command=lambda u=url:webbrowser.open(u))
+            try:menu.tk_popup(event.x_root,event.y_root)
+            finally:menu.grab_release()
+        self.execution_tree.bind('<Button-3>',execution_context)
         executed.pack(fill='both',expand=True);self.refresh_reservations()
         fit_window(top,940,500,flex=book)
+    def on_toggle_hide_anytime(self):
+        self.settings['hide_anytime']=bool(self.hide_anytime.get())
+        self.store.save_settings(self.settings)
+        self.refresh_reservations()
     def sort_reservations(self,col):
         cur,rev=self.reservation_sort
         self.reservation_sort=(col,not rev if cur==col else False)
@@ -804,6 +890,8 @@ class StudioApp:
         rules=[r for r in snapshot if r.get('keyword') or r.get('official_tag')]
         rows=[]
         for idx,r in enumerate(snapshot):
+            if self.hide_anytime.get() and not r.get('start'):
+                continue
             start=datetime.fromtimestamp(r['start']).strftime('%y/%m/%d %H:%M') if r['start'] else tr('随時')
             message=r.get('message') or STATE.get(r['state'],r['state'])
             if r['state']=='waiting':
@@ -824,17 +912,20 @@ class StudioApp:
         restore=[r['id'] for _,r,_ in rows if r['id'] in selected]
         if restore:self.reservations_tree.selection_set(restore)
         ecol,erev=self.execution_sort
-        for k,title in [('time',tr('実行日時')),('title',tr('番組')),('status',tr('結果'))]:
+        for k,title in [('time',tr('実行日時')),('title',tr('番組')),('source',tr('予約元・実行元')),('status',tr('結果'))]:
             self.execution_tree.heading(k,text=title+(' ▼' if erev else ' ▲') if k==ecol else title)
         self.execution_tree.delete(*self.execution_tree.get_children())
         exec_rows=[]
         for idx,e in enumerate(reversed(self.executions[-200:])):
-            exec_rows.append((idx,e,(datetime.fromtimestamp(e['time']).strftime('%y/%m/%d %H:%M'),e['title'],tr(e['status'])+(' · '+tr(e['reason']) if e.get('reason') else ''))))
+            exec_rows.append((idx,e,(datetime.fromtimestamp(e['time']).strftime('%y/%m/%d %H:%M'),e['title'],e.get('source') or '—',tr(e['status'])+(' · '+tr(e['reason']) if e.get('reason') else ''))))
         if ecol:
-            ecidx={'time':0,'title':1,'status':2}[ecol]
+            ecidx={'time':0,'title':1,'source':2,'status':3}[ecol]
             if ecol=='time':exec_rows.sort(key=lambda item:(item[1].get('time',0) or 0,item[2][1].casefold(),item[0]),reverse=erev)
             else:exec_rows.sort(key=lambda item:(str(item[2][ecidx]).casefold(),item[2][1].casefold(),item[0]),reverse=erev)
-        for _,_,values in exec_rows:self.execution_tree.insert('','end',values=values)
+        self._execution_urls={}
+        for idx,(_,e,values) in enumerate(exec_rows):
+            iid=f"exec_{idx}";self._execution_urls[iid]=web_url_for_item({'url':e.get('url','')})
+            self.execution_tree.insert('','end',iid=iid,values=values)
 
     def open_local(self):
         path=filedialog.askopenfilename(parent=self.root,title=tr('録画を開く（同名のコメントを自動読込）'),filetypes=[(tr('動画'),'*.ts *.mp4 *.mkv *.webm'),(tr('すべて'),'*.*')])

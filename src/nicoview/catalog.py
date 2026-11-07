@@ -279,7 +279,10 @@ _THUMB_NETWORK_LOCK=threading.Lock()
 def thumbnail_dir():
     d=app_dir()/'thumbnails'
     try:d.mkdir(parents=True,exist_ok=True)
-    except OSError:pass
+    except OSError:
+        # Use per-user storage if the app directory is read-only.
+        local_app_data=Path(os.getenv('LOCALAPPDATA') or Path.home()/'AppData'/'Local')
+        return local_app_data/'NicoLiveViewer'/'thumbnails'
     return d
 
 

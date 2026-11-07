@@ -28,6 +28,10 @@ def stream_plugin(session, url, on_comments):
     from streamlink.plugins.nicolive import NicoLive, NicoLiveWsClient, NicoLiveHLSStream
 
     class ViewerSocket(NicoLiveWsClient):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.disconnect_reason = None
+
         def on_message(self, wsapp, data):
             try:
                 message=json.loads(data)
@@ -37,6 +41,8 @@ def stream_plugin(session, url, on_comments):
                     if info['archive']:info['at']='now'
                     on_comments(info)
                 if getattr(self,'poster',None):self.poster.receive(message)
+                if message.get('type')=='disconnect':
+                    self.disconnect_reason=message.get('data',{}).get('reason','')
             except (ValueError,KeyError,TypeError):pass
             super().on_message(wsapp,data)
 
@@ -46,10 +52,10 @@ def stream_plugin(session, url, on_comments):
             if session.http.cookies.get('user_session') and data.get('user',{}).get('isLoggedIn') is False:
                 session.http.cookies.clear()
                 raise ValueError('ログインの有効期限が切れました。もう一度ログインしてください。')
+            self.program=data.get('program',{})
             ws_url=self.find_wss_api_url(data)
             if not ws_url:return {}
             self.id,self.author,self.title=self.find_metadata(data)
-            self.program=data.get('program',{})
             self.is_timeshift='timeshift' in ws_url or self.program.get('status')=='ENDED'
             self.posting_allowed=data.get('user',{}).get('isLoggedIn') is True and data.get('program',{}).get('status')=='ON_AIR'
             self.wsclient=ViewerSocket(session,ws_url)
@@ -75,6 +81,18 @@ class Worker:
         self.ready_sent=False
         self.playback_finished=threading.Event()
         self.stall_timeout=12.0
+
+    def is_program_ended(self, *, refresh=False):
+        plugin=self.plugin
+        if plugin is None:return False
+        ws=getattr(plugin,'wsclient',None)
+        if getattr(ws,'disconnect_reason',None) in ('END_PROGRAM','PROGRAM_ENDED','end_program'):
+            return True
+        try:
+            program=plugin.get_data().get('program') if refresh else getattr(plugin,'program',None)
+        except Exception:
+            return False
+        return isinstance(program,dict) and program.get('status')=='ENDED'
 
     def event(self,kind, text=None, **values):
         e={'type':kind,'request_id':self.current}
@@ -224,7 +242,9 @@ class Worker:
             if ending or exited or stalled:
                 reason=ending.get('reason') if ending else None
                 user_closed=not stalled and (reason in ('quit','stop') or (ending is None and exited and player.returncode==0))
-                self.player_completed=bool(not stalled and self.seekable and reason=='eof')
+                ended=bool(not stalled and reason=='eof' and (self.seekable or self.is_program_ended(refresh=True)))
+                if stop.is_set():return
+                self.player_completed=ended
                 self.playback_finished.set()
                 if self.player_completed and self.mode=='both':
                     # A VOD player can reach EOF while recording/comment downloads
@@ -236,6 +256,8 @@ class Worker:
                     self.event('error','再生が停止しました。再接続を確認しています。')
                 elif not self.player_completed:
                     self.event('error','再生接続が終了しました。再接続を確認しています。')
+                else:
+                    self.event('status','番組の放送が終了しました。')
                 stop.set()
                 if self.source:
                     source=self.source
@@ -324,7 +346,10 @@ class Worker:
                     self.event('session_invalid','ログインが失効しました。ブラウザでログインし直してください。')
                 raise
             if self.stop.is_set():raise Cancelled()
-            if not streams:raise ValueError('再生できる配信がありません。放送中か、視聴権限があるか確認してください。')
+            if not streams:
+                if self.is_program_ended():
+                    raise ValueError('番組の放送は終了しました。')
+                raise ValueError('再生できる配信がありません。放送中か、視聴権限があるか確認してください。')
             quality=self.settings.get('quality','best')
             stream=streams.get(quality) or streams.get('best') or next(iter(streams.values()))
             if quality not in streams:self.event('status','選択した画質がないため利用可能な最高画質を使用します。')
@@ -354,8 +379,12 @@ class Worker:
                 while not self.stop.is_set():
                     chunk=self.source.read(65536)
                     if not chunk:
-                        completed=self.seekable
-                        if not completed:self.event('error','録画接続が終了しました。再接続を確認しています。')
+                        ended=self.seekable or (self.recording.bytes>0 and self.is_program_ended(refresh=True))
+                        completed=ended
+                        if not completed:
+                            self.event('error','録画接続が終了しました。再接続を確認しています。')
+                        else:
+                            self.event('status','番組の放送が終了しました。')
                         break
                     self.recording.write(chunk)
                     if not self.ready_sent:
@@ -372,7 +401,7 @@ class Worker:
         except ValueError as exc:
             # Only explicit application messages, never raw network/credential payloads.
             text=str(exc)
-            self.event('error',text if any(text.startswith(p) for p in ('SVP','VapourSynth','mpv.exe','ログイン','メール','再生できる','認証コード','https://','番組URL','録画','コメントファイル'))
+            self.event('error',text if any(text.startswith(p) for p in ('SVP','VapourSynth','mpv.exe','ログイン','メール','再生できる','認証コード','https://','番組URL','録画','コメントファイル','番組の放送'))
                        else '入力または接続内容を確認してください。')
         except BrokenPipeError:
             if not self.stop.is_set():self.event('status','プレイヤーが終了しました。')

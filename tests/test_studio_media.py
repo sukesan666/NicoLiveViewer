@@ -1,3 +1,4 @@
+import html
 import io
 import json
 import tempfile
@@ -61,6 +62,69 @@ class StudioMediaTests(unittest.TestCase):
             self.assertEqual(len(ready),1,events)
             self.assertEqual(ready[0]['mode'],'record')
         w.close()
+
+    def test_live_recording_completes_when_authenticated_end_check_confirms(self):
+        from requests import Response
+        from nicoview.worker import stream_plugin
+
+        events=[]
+        worker=Worker(events.append)
+        self.addCleanup(worker.close)
+        url='https://live.nicovideo.jp/watch/lv1'
+
+        def watch_page(session, request, **kwargs):
+            response=Response()
+            response.status_code=200
+            response.url=request.url
+            response.encoding='utf-8'
+            status='ENDED' if request.headers.get('Cookie')=='user_session=fixture_session' else 'ON_AIR'
+            data=html.escape(json.dumps({'program':{'nicoliveProgramId':'lv1','status':status}}))
+            response._content=f'<script id="embedded-data" data-props="{data}"></script>'.encode()
+            return response
+
+        plugin=stream_plugin(worker.auth.session,url,lambda info:None)
+        plugin.title='LiveTest'
+        plugin.id='lv1'
+        plugin.author='Author'
+        plugin.program={'status':'ON_AIR'}
+        plugin.posting_allowed=False
+        plugin.is_timeshift=False
+        stream=MagicMock()
+        stream.open.return_value=io.BytesIO(b'video')
+        credentials={'session':[{'name':'user_session','value':'fixture_session','domain':'.nicovideo.jp','path':'/'}]}
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch('requests.Session.send',autospec=True,side_effect=watch_page) as send,
+            patch('nicoview.worker.stream_plugin',return_value=plugin),
+            patch.object(plugin,'streams',return_value={'best':stream}),
+        ):
+            worker.handle({'type':'start','request_id':'live-record','mode':'record',
+                'url':url,'credentials':credentials,'settings':{'recording_dir':directory}})
+            worker.thread.join(10)
+            self.assertFalse(worker.thread.is_alive())
+            self.assertTrue(any(e['type']=='completed' and e['ok'] for e in events),events)
+            self.assertFalse(any(e['type']=='error' for e in events),events)
+            self.assertEqual(send.call_count,1)
+            self.assertEqual(send.call_args.args[1].url,url)
+            ts_files=list(Path(directory).glob('*/*/*.ts'))
+            self.assertTrue(any(not f.name.endswith('.partial.ts') for f in ts_files))
+
+    def test_no_streams_uses_program_status_from_original_watch_page(self):
+        events=[]
+        worker=Worker(events.append)
+        self.addCleanup(worker.close)
+        data={'program':{'nicoliveProgramId':'lv1','status':'ENDED'},'site':{'relive':{'webSocketUrl':''}}}
+        with (
+            patch.object(worker.auth.session.http,'get',return_value=data) as get,
+            patch('requests.Session.send',side_effect=AssertionError('Unexpected additional HTTP request')) as send,
+        ):
+            worker.handle({'type':'start','request_id':'ended-program','mode':'record',
+                'url':'https://live.nicovideo.jp/watch/lv1','credentials':None})
+            worker.thread.join(10)
+            self.assertFalse(worker.thread.is_alive())
+            self.assertIn('番組の放送は終了しました。',[e.get('text') for e in events if e['type']=='error'])
+            get.assert_called_once()
+            send.assert_not_called()
 
     def test_record_open_failure_never_acknowledges_job_ready(self):
         events=[];worker=Worker(events.append)

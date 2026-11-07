@@ -123,3 +123,56 @@ class KeywordTests(unittest.TestCase):
         self.assertEqual(rows[1]['mode'],'record')
         with self.assertRaises(ValueError):s.add({'official_tag':'  '},'play')
         with self.assertRaises(ValueError):s.add({'official_tag':'舞台'},'record')
+
+
+    def test_finish_removes_single_and_transitions_rule_to_waiting(self):
+        s=Scheduler()
+        p_id=s.add({'url':'https://live.nicovideo.jp/watch/lv1'},'record')
+        u_id=s.add({'user_id':'12345','title':'User'},'record')
+        s.ack(p_id,True,'実行中')
+        s.ack(u_id,True,'実行中')
+        self.assertEqual(s.snapshot()[0]['state'],'started')
+        self.assertEqual(s.snapshot()[0]['message'],'実行中')
+        s.finish(p_id,'完了')
+        s.finish(u_id)
+        snaps=s.snapshot()
+        self.assertEqual(len(snaps),1)
+        self.assertEqual(snaps[0]['id'],u_id)
+        self.assertEqual(snaps[0]['state'],'waiting')
+        self.assertEqual(snaps[0]['message'],'待機中')
+
+    def test_restored_stale_running_message_is_corrected(self):
+        restored=Scheduler([
+            {'id':'p1','url':'https://live.nicovideo.jp/watch/lv1','state':'started','message':'実行中','mode':'record'},
+            {'id':'u1','user_id':'12345','state':'waiting','message':'実行中','mode':'record'}
+        ])
+        snaps=restored.snapshot()
+        self.assertEqual(len(snaps),1)
+        self.assertEqual(snaps[0]['id'],'u1')
+        self.assertEqual(snaps[0]['state'],'waiting')
+        self.assertEqual(snaps[0]['message'],'待機中')
+
+    def test_restored_ended_records_are_dropped(self):
+        restored=Scheduler([
+            {'id':'p1','url':'https://live.nicovideo.jp/watch/lv1','state':'ended','message':'終了','mode':'record'},
+            {'id':'u1','user_id':'12345','state':'waiting','message':'待機中','mode':'record'}
+        ])
+        snaps=restored.snapshot()
+        self.assertEqual(len(snaps),1)
+        self.assertEqual(snaps[0]['id'],'u1')
+
+    def test_finishing_previous_broadcast_keeps_new_push_queued(self):
+        scheduler=Scheduler()
+        ident=scheduler.add({'user_id':'12345'},'record')
+        launch=lambda *_:None
+        previous={'id':'lv1','url':'https://live.nicovideo.jp/watch/lv1','user_id':'12345','start':100}
+        scheduler.notify_live(previous,launch,now=100)
+        scheduler.ack(ident,True,'実行中',previous,now=100)
+        following={'id':'lv2','url':'https://live.nicovideo.jp/watch/lv2','user_id':'12345','start':101}
+        scheduler.notify_live(following,launch,now=101)
+        self.assertEqual(scheduler.snapshot()[0]['state'],'queued')
+        scheduler.finish(ident,'完了')
+        row=scheduler.snapshot()[0]
+        self.assertEqual(row['state'],'queued')
+        self.assertEqual(row['message'],'起動待ち（プッシュ通知）')
+        self.assertEqual(scheduler.pending_push[ident]['program']['id'],'lv2')
