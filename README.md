@@ -52,3 +52,60 @@ $env:PYTHONPATH = 'src'
 EXEの作成は `powershell -ExecutionPolicy Bypass -File .\build-public.ps1`。このスクリプトだけでは第三者ライセンス通知・対応ソースの配布準備は完了しません。アプリのソースは [MIT License](LICENSE)、依存物と再配布時の注意は [THIRD_PARTY.md](THIRD_PARTY.md) を確認してください。
 
 本アプリはニコニコの公式製品ではありません。視聴権限のある番組を対象に利用してください。Web版NGとの自動同期と公式ギフト演出は含まれません。
+
+---
+
+# NicoLive Studio — NicoLive Viewer (English)
+
+An unofficial Nico Nico Live viewer for Windows. It uses mpv to display video and comments, and provides a single interface for searching, watching, recording, and scheduling broadcasts.
+
+For usage instructions, see [USAGE.md](USAGE.md) (Japanese). For implementation and verification coverage, see [FEATURE_STATUS.md](FEATURE_STATUS.md) (Japanese), and for changes, see [RELEASE_NOTES.md](RELEASE_NOTES.md) (Japanese).
+
+## Features
+
+- Browser-based login and two-step verification, with login state encrypted and stored on Windows
+- Watch multiple broadcasts, post colored comments or anonymous 184 comments, and control volume or mute for each broadcast
+- Comments that adapt to mpv resizing and fullscreen mode; configurable font, size, and comment FPS (1–240)
+- Recording-only mode without opening mpv; watch and record at the same time; save video and comments separately and play them together
+- Schedule broadcasts, users, and channels; automatically add broadcast schedules using official keywords and tags
+- Recording list, viewing history, and seeking in time-shift broadcasts and saved videos
+- Japanese and English; dark and light themes; saved display scaling, position, and window size
+- Export, import, and back up settings; in-app comment filtering; notification sounds and quiet hours
+- Optional Windows startup, minimize to the notification area, and prevent automatic sleep
+
+A shared setting allows up to 16 concurrent playback and recording tasks. The actual number depends on your PC, network connection, and streaming format.
+
+## Getting Started
+
+For the packaged version, extract the entire folder and run `NicoLiveViewer.exe`. The `_internal` folder must be next to the executable.
+
+Packages created with `build-public.ps1` do not include mpv, FFmpeg, or SVP. Install [mpv](https://mpv.io/installation/) for playback and [FFmpeg](https://ffmpeg.org/download.html) if required by the streaming format, then set their paths in the app's settings. To use SVP, you also need SVP itself and a compatible mpv setup.
+
+Open the dedicated Edge browser from the login screen, complete login and two-step verification, and then close the browser window. Settings, schedules, and history are stored in `%APPDATA%/NicoLiveViewer`. The saved login state is available to the same Windows user; you will need to log in again after reinstalling the OS.
+
+## Automatic Scheduling
+
+The app does not periodically poll broadcast or user status. Playback and recording start when a push notification announces that a broadcast has begun. Users and channels added to schedules are also followed through your Nico Nico account. Removing a schedule does not unfollow them on the site.
+
+Official keyword and tag searches run daily at 3:00 a.m. Japan time, or every hour if a search fails. Schedules created from search results also require a push notification to start. Automatic actions are unavailable if notifications are not delivered, are disabled or expired, or while the PC is asleep or the app is closed. Automatic execution based on actual start notifications for official and channel broadcasts still needs verification in a live environment.
+
+## Run from Source
+
+You need Python for Windows and Tkinter. Dependencies are pinned in [requirements.txt](requirements.txt). The supported Python version range has not yet been determined, so verify dependency installation and operation in your environment.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe launch.py
+```
+
+Run tests:
+
+```powershell
+$env:PYTHONPATH = 'src'
+.\.venv\Scripts\python.exe -m unittest discover -s tests
+```
+
+Build the executable with `powershell -ExecutionPolicy Bypass -File .\build-public.ps1`. This script alone does not complete the preparation of third-party license notices or corresponding source code for distribution. See the [MIT License](LICENSE) for the application source, and [THIRD_PARTY.md](THIRD_PARTY.md) for dependencies and redistribution notes.
+
+This app is not an official Nico Nico product. Use it only with broadcasts you are authorized to watch. Automatic synchronization with the web version's comment filters and official gift effects are not included.
