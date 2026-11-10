@@ -64,6 +64,26 @@ class NamedPipeServer:
 
 
 def exercise_pipe(case):
+    if case=='server-identity':
+        from nicoview import svp
+        server=NamedPipeServer()
+        ipc=PlayerIPC(server.path)
+        peer=threading.Thread(target=server.accept,daemon=True)
+        peer.start()
+        try:
+            ipc.connect(timeout=2)
+            svp.verify_server(ipc,os.getpid())
+            try:svp.verify_server(ipc,os.getpid()+1)
+            except ValueError:pass
+            else:raise AssertionError('Wrong server PID was accepted')
+            ipc.close()
+            try:ipc.server_process_id()
+            except OSError:pass
+            else:raise AssertionError('Closed pipe returned a server PID')
+        finally:
+            ipc.close();peer.join(2);server.close()
+        print('PIPE PASS '+case)
+        return
     server = NamedPipeServer()
     ipc = PlayerIPC(server.path)
     connected = threading.Event()
@@ -182,6 +202,9 @@ class WindowsPipeRegressions(unittest.TestCase):
 
     def test_write_timeout_invalidates_partial_command_connection(self):
         self.run_case('timeout')
+
+    def test_svp_server_identity_uses_the_overlapped_pipe(self):
+        self.run_case('server-identity')
 
 
 if __name__ == '__main__':

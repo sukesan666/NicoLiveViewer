@@ -25,6 +25,8 @@ _kernel.CancelIoEx.argtypes=[W.HANDLE,ctypes.POINTER(_Overlapped)]
 _kernel.CancelIoEx.restype=W.BOOL
 _kernel.PeekNamedPipe.argtypes=[W.HANDLE,ctypes.c_void_p,W.DWORD,ctypes.c_void_p,ctypes.POINTER(W.DWORD),ctypes.c_void_p]
 _kernel.PeekNamedPipe.restype=W.BOOL
+_kernel.GetNamedPipeServerProcessId.argtypes=[W.HANDLE,ctypes.POINTER(W.ULONG)]
+_kernel.GetNamedPipeServerProcessId.restype=W.BOOL
 _kernel.WaitForSingleObject.argtypes=[W.HANDLE,W.DWORD]
 _kernel.WaitForSingleObject.restype=W.DWORD
 _kernel.CloseHandle.argtypes=[W.HANDLE]
@@ -102,6 +104,14 @@ class WindowsPipe:
         buffer=ctypes.create_string_buffer(size)
         count=self._transfer(_kernel.ReadFile,buffer,size)
         return buffer.raw[:count]
+
+    def server_process_id(self):
+        actual=W.ULONG()
+        with self._lock:
+            if self._closed:raise OSError('Player pipe is closed')
+            if not _kernel.GetNamedPipeServerProcessId(self._handle,ctypes.byref(actual)):
+                raise ctypes.WinError(ctypes.get_last_error())
+        return actual.value
 
     def write(self,data):
         deadline=time.monotonic()+self.write_timeout

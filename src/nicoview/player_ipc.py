@@ -29,6 +29,10 @@ class PlayerIPC:
     def _read_available(self):
         return self._windows_pipe.read_available() if self._windows_pipe else b''
 
+    def server_process_id(self):
+        if not self._windows_pipe:raise OSError('Windows player pipe is not connected')
+        return self._windows_pipe.server_process_id()
+
     def _drain(self):
         try:
             if os.name=='nt':

@@ -46,13 +46,7 @@ def check_pipe_available():
 
 def verify_server(ipc, pid):
     """Close a startup race safely: never control an unrelated mpv process."""
-    import ctypes
-    import msvcrt
-    from ctypes import wintypes as W
-    dll=ctypes.WinDLL('kernel32',use_last_error=True)
-    get_pid=dll.GetNamedPipeServerProcessId
-    get_pid.argtypes=[W.HANDLE,ctypes.POINTER(W.ULONG)];get_pid.restype=W.BOOL
-    actual=W.ULONG()
-    handle=W.HANDLE(msvcrt.get_osfhandle(ipc.file.fileno()))
-    if not get_pid(handle,ctypes.byref(actual)) or actual.value != pid:
+    try:actual=ipc.server_process_id()
+    except OSError:actual=None
+    if actual != pid:
         raise ValueError('SVP接続が競合しました。他のSVP対応mpvを閉じて再生し直してください。')

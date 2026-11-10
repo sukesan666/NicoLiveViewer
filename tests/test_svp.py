@@ -1,7 +1,7 @@
 import tempfile
 from pathlib import Path
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from nicoview.settings import clean_settings, save_settings, load_settings
 from nicoview.playback import build_player_args
@@ -45,3 +45,17 @@ class SVPTests(unittest.TestCase):
             self.assertNotIn('PYTHONPATH',env)
             self.assertNotIn('PYTHONHOME',env)
             self.assertEqual(env['PATH'],'keep')
+
+    def test_server_check_uses_the_player_ipc_transport(self):
+        ipc=Mock(spec=['server_process_id'])
+        ipc.server_process_id.return_value=123
+        svp.verify_server(ipc,123)
+        ipc.server_process_id.assert_called_once_with()
+        with self.assertRaisesRegex(ValueError,'SVP'):
+            svp.verify_server(ipc,124)
+
+    def test_closed_server_check_reports_an_actionable_svp_error(self):
+        ipc=Mock(spec=['server_process_id'])
+        ipc.server_process_id.side_effect=OSError('closed')
+        with self.assertRaisesRegex(ValueError,'SVP'):
+            svp.verify_server(ipc,123)
