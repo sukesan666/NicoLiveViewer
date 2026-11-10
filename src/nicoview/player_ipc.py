@@ -9,41 +9,25 @@ class PlayerIPC:
         self.path=path; self.file=None; self.reader=None; self.lock=threading.Lock(); self.closed=False
         self.read_lock=threading.RLock()
         self.properties={};self.buffer=b'';self.events=[]
-        self._peek=None; self._handle=None
+        self._windows_pipe=None
 
     def connect(self, stop=None, timeout=8):
         deadline=time.monotonic()+timeout
         while time.monotonic()<deadline and not (stop and stop.is_set()):
             try:
-                self.file=open(self.path,'r+b',buffering=0)
-                # The Windows CRT locks a descriptor during blocking reads.
-                # Use a separate descriptor so the read cannot block all writes.
-                self.reader=os.fdopen(os.dup(self.file.fileno()),'rb',buffering=0)
                 if os.name=='nt':
-                    import ctypes
-                    import msvcrt
-                    from ctypes import wintypes as W
-                    self._peek=ctypes.WinDLL('kernel32',use_last_error=True).PeekNamedPipe
-                    self._peek.argtypes=[W.HANDLE,ctypes.c_void_p,W.DWORD,ctypes.c_void_p,ctypes.POINTER(W.DWORD),ctypes.c_void_p]
-                    self._handle=W.HANDLE(msvcrt.get_osfhandle(self.reader.fileno()))
+                    from .windows_pipe import WindowsPipe
+                    self.file=self.reader=self._windows_pipe=WindowsPipe(self.path)
+                else:
+                    self.file=open(self.path,'r+b',buffering=0)
+                    self.reader=os.fdopen(os.dup(self.file.fileno()),'rb',buffering=0)
                 threading.Thread(target=self._drain,daemon=True).start()
                 return
             except OSError: time.sleep(.1)
         raise TimeoutError('プレイヤーに接続できませんでした。')
 
     def _read_available(self):
-        if self._peek is None or self.reader is None:return b''
-        from ctypes import byref, wintypes as W
-        available=W.DWORD()
-        chunks=[]
-        while not self.closed:
-            if not self._peek(self._handle,None,0,None,byref(available),None):
-                return None if not chunks else b''.join(chunks)
-            if not available.value:break
-            chunk=self.reader.read(min(available.value,65536))
-            if not chunk:break
-            chunks.append(chunk)
-        return b''.join(chunks)
+        return self._windows_pipe.read_available() if self._windows_pipe else b''
 
     def _drain(self):
         try:
