@@ -63,6 +63,21 @@ local function check()
 
     render(1000,1000)
     assert(math.abs(overlay.res_x/overlay.res_y-1)<0.001, 'coordinate system must follow the aspect ratio')
+    messages['nico-clear']()
+    now=10
+    messages['nico-comment']('slow', 'FFFFFF')
+    now=14
+    render(1280,720)
+    assert(overlay.data and overlay.data:find('slow',1,true), 'single comment must remain on screen at 4s')
+    messages['nico-clear']()
+    now=20
+    for i=1,30 do messages['nico-comment']('burst '..i, 'FFFFFF') end
+    now=22
+    render(1280,720)
+    assert(overlay.data:find('burst 1',1,true), 'burst comments must be visible at 2s')
+    now=24
+    timer.tick()
+    assert(not overlay.data:find('burst',1,true), 'burst comments must accelerate and finish within 4s')
     screen_w, screen_h = 0, 0
     timer.tick()
     messages['nico-comment']('invalid screen')

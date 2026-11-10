@@ -53,3 +53,4 @@ ffmpeg/
 /scratch_*.html
 /.agents/
 /.codex/
+/.continue/

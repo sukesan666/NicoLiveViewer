@@ -15,7 +15,21 @@ local function comment_time()
     return media_pos + (mp.get_time()-media_at) * mp.get_property_number('speed',1)
 end
 local comments = {}
+local arrivals = {}
 local duration = 8
+local min_duration = 3.2
+
+local function active_duration(now)
+    local recent = {}
+    for _, t in ipairs(arrivals) do
+        if t <= now and now - t <= 2 then recent[#recent+1] = t end
+    end
+    arrivals = recent
+    local pressure = math.max(#comments, #arrivals * 2)
+    if pressure <= 4 then return duration end
+    local scale = math.min(1, (pressure - 4) / 46)
+    return duration - scale * (duration - min_duration)
+end
 
 -- Keep layout in 720p coordinates so fonts, lanes, borders and active comments
 -- scale together when the player is resized or switched to fullscreen.
@@ -54,19 +68,36 @@ mp.register_script_message('nico-config', function(data)
     config.enabled = c.enabled ~= false
     config.fps = math.max(1, math.min(240, tonumber(c.fps) or 120))
     frame_interval = 1/config.fps
-    if not config.enabled then comments = {}; overlay:remove() end
+    if not config.enabled then comments = {}; arrivals = {}; overlay:remove() end
 end)
 
 mp.register_script_message('nico-comment', function(text, color)
-    if not config.enabled or #comments >= 100 then return end
+    if not config.enabled then return end
     local w,h = comment_canvas()
     if not w then return end
+    local now = comment_time()
+    local active = {}
+    for _, c in ipairs(comments) do
+        local d = c.duration or duration
+        if now - c.at < d then active[#active+1] = c end
+    end
+    comments = active
+    if #arrivals < 200 then table.insert(arrivals, now) end
+    local cur_duration = active_duration(now)
+    for _, c in ipairs(comments) do
+        local d = c.duration or duration
+        if d > cur_duration then
+            local progress = math.max(0, (now - c.at) / d)
+            c.duration = cur_duration
+            c.at = now - progress * cur_duration
+        end
+    end
+    if #comments >= 100 then return end
     color = tostring(color or 'FFFFFF'):upper()
     if not color:match('^%x%x%x%x%x%x$') then color='FFFFFF' end
     -- ASS color order is BGR, while NDGR and IPC use RGB.
     local bgr = color:sub(5,6)..color:sub(3,4)..color:sub(1,2)
     local border = (color=='000000' or color=='666666') and 'FFFFFF' or '000000'
-    local now = comment_time()
     local size = config.size * 4/3
     -- UTF-8 continuation bytes do not count as glyphs; conservative width reserves CJK space.
     local _, glyphs = text:gsub('[^\128-\191]', '')
@@ -78,11 +109,12 @@ mp.register_script_message('nico-comment', function(text, color)
         local free = true
         for _, c in ipairs(comments) do
             if math.abs(c.y-y) < math.max(c.size,size)+10 then
-                local x = w - ((now-c.at)/duration)*(w+c.width)
+                local c_dur = c.duration or duration
+                local x = w - ((now-c.at)/c_dur)*(w+c.width)
                 if x+c.width+24 > w then free=false; break end
                 -- Faster new comments must not catch the previous comment before it exits.
-                local new_speed=(w+width)/duration
-                local old_speed=(w+c.width)/duration
+                local new_speed=(w+width)/cur_duration
+                local old_speed=(w+c.width)/c_dur
                 if new_speed>old_speed and (w-x-c.width)/(new_speed-old_speed) < (x+c.width)/old_speed then
                     free=false; break
                 end
@@ -92,11 +124,11 @@ mp.register_script_message('nico-comment', function(text, color)
         y=y+row_h
     end
     if not chosen then return end
-    table.insert(comments,{text=escape(text),at=now,y=chosen,size=size,font=config.font,width=width,color=bgr,border=border})
+    table.insert(comments,{text=escape(text),at=now,duration=cur_duration,y=chosen,size=size,font=config.font,width=width,color=bgr,border=border})
 end)
 
-mp.register_script_message('nico-clear', function() comments={}; overlay:remove() end)
-mp.register_event('seek', function() comments={}; overlay:remove() end)
+mp.register_script_message('nico-clear', function() comments={}; arrivals={}; overlay:remove() end)
+mp.register_event('seek', function() comments={}; arrivals={}; overlay:remove() end)
 
 local function render_comments()
     if not config.enabled or #comments==0 then overlay:remove(); return end
@@ -104,8 +136,9 @@ local function render_comments()
     if not w then return end
     local now=comment_time(); local a=assdraw.ass_new(); local keep={}
     for _,c in ipairs(comments) do
-        if now-c.at<duration then
-            local x=w-((now-c.at)/duration)*(w+c.width)
+        local d=c.duration or duration
+        if now-c.at<d then
+            local x=w-((now-c.at)/d)*(w+c.width)
             a:new_event(); a:append(string.format('{\\an7\\pos(%.1f,%.1f)\\fn%s\\fs%.1f\\bord2\\shad0\\1c&H%s&\\3c&H%s&}',x,c.y,c.font,c.size,c.color,c.border))
             a:append(c.text); table.insert(keep,c)
         end

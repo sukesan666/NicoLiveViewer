@@ -182,8 +182,9 @@ class Worker:
                 if self.timeline is not None:
                     ready=[] if state.get('pause') else self.timeline.ready(self.position,settings.get('comment_offset',0)+settings['delay'])
                 else:ready=self.comments.ready(now,max(0,settings['delay']+settings.get('comment_offset',0)))
-                for c in ready:
-                    if settings['enabled'] and allowed_comment(c,settings):ipc.send(['script-message','nico-comment',c.text,c.color])
+                if settings['enabled']:
+                    for c in [c for c in ready if allowed_comment(c,settings)][-60:]:
+                        ipc.send(['script-message','nico-comment',c.text,c.color])
             except (OSError,ValueError):
                 if player and player.poll() is not None:return
                 elif ident==self.current and not stop.is_set():

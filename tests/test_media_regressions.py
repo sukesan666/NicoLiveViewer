@@ -130,3 +130,53 @@ class MediaRegressions(unittest.TestCase):
             self.assertFalse(next(e['ok'] for e in events if e['type']=='completed'))
             self.assertEqual(sum(e['type']=='job_ready' for e in events),1)
         worker.close()
+
+
+    def test_ipc_send_drains_pending_replies_and_overlay_bounds_burst(self):
+        import io
+        from nicoview.comments import Comment
+        ipc=PlayerIPC('unused');ipc.file=io.BytesIO()
+        with patch.object(ipc,'_read_available',return_value=b'{"event":"property-change","name":"time-pos","data":4.5}\n'):
+            ipc.send(['script-message','nico-comment','hello','FFFFFF'])
+        self.assertEqual(ipc.snapshot().get('time-pos'),4.5)
+        worker=Worker(lambda e:None);worker.current='burst';worker.ipc=MagicMock()
+        now=time.monotonic()
+        for i in range(200):worker.comments.add(Comment(str(i),f'c{i}',now-1))
+        with patch.object(worker.stop,'wait',side_effect=[False,True]):
+            worker._overlay()
+        comment_calls=[c for c in worker.ipc.send.call_args_list if c.args[0][:2]==['script-message','nico-comment']]
+        self.assertEqual(len(comment_calls),60)
+        self.assertEqual(comment_calls[-1].args[0][2],'c199')
+        worker.ipc=None;worker.close()
+
+    def test_ipc_reader_and_snapshot_remain_usable_during_blocked_write(self):
+        writing=threading.Event();release_writer=threading.Event();drained=threading.Event()
+        snapshot_done=threading.Event()
+        class BlockedWriter:
+            def write(self,data):
+                writing.set()
+                release_writer.wait(5)
+            def close(self):pass
+        ipc=PlayerIPC('unused');ipc.file=BlockedWriter()
+        def read_available():
+            if writing.is_set() and not drained.is_set():
+                drained.set()
+                return b'{"event":"property-change","name":"time-pos","data":4.5}\n'
+            return b''
+        def snapshot():
+            ipc.snapshot();snapshot_done.set()
+        sender=threading.Thread(target=ipc.send,args=(['script-message','test'],),daemon=True)
+        reader=threading.Thread(target=ipc._drain,daemon=True)
+        observer=threading.Thread(target=snapshot,daemon=True)
+        with patch.object(ipc,'_read_available',side_effect=read_available):
+            try:
+                sender.start();self.assertTrue(writing.wait(1))
+                reader.start();observer.start()
+                self.assertTrue(drained.wait(1),'Reader must drain while a write is blocked')
+                self.assertTrue(snapshot_done.wait(1),'Snapshot must remain available during blocked writes')
+                self.assertTrue(sender.is_alive(),'The write should remain blocked during reader/state checks')
+            finally:
+                ipc.closed=True;release_writer.set()
+                for thread in (sender,reader,observer):
+                    if thread.ident is not None:thread.join(1)
+        self.assertEqual(ipc.snapshot().get('time-pos'),4.5)
