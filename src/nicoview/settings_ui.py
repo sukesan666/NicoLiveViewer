@@ -1,5 +1,6 @@
 """Settings and first-run dialogs; parent applies saved changes to live jobs."""
 from .i18n import LANGUAGES, tr
+import os
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk,filedialog,messagebox
@@ -144,7 +145,8 @@ class FirstRunGuide(tk.Toplevel):
             ttk.Label(row,text=label).pack(side='left')
             ttk.Entry(row,textvariable=variable).pack(side='left',fill='x',expand=True,padx=8)
             def choose(v=variable):
-                path=filedialog.askopenfilename(parent=self,filetypes=[(tr('実行ファイル'),'*.exe'),(tr('すべて'),'*.*')])
+                types=[(tr('実行ファイル'),'*.exe'),(tr('すべて'),'*.*')] if os.name=='nt' else [(tr('すべて'),'*.*')]
+                path=filedialog.askopenfilename(parent=self,filetypes=types)
                 if path: v.set(path)
             ttk.Button(row,text=tr('参照'),command=choose).pack(side='right')
         ttk.Button(body,text=tr('ログインを設定'),command=on_login).grid(row=5,column=0,sticky='w',pady=16)

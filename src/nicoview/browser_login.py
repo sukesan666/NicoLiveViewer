@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from urllib.parse import urlsplit
@@ -19,10 +20,22 @@ class BrowserLoginError(ValueError):
     """Safe, user-facing messages only; never include browser data."""
 
 def find_edge():
-    for root in (os.environ.get('ProgramFiles(x86)','C:/Program Files (x86)'),
-                 os.environ.get('ProgramFiles','C:/Program Files')):
-        p=Path(root)/'Microsoft/Edge/Application/msedge.exe'
-        if p.is_file():return str(p)
+    if os.name=='nt':
+        for root in (os.environ.get('ProgramFiles(x86)','C:/Program Files (x86)'),
+                     os.environ.get('ProgramFiles','C:/Program Files')):
+            p=Path(root)/'Microsoft/Edge/Application/msedge.exe'
+            if p.is_file():return str(p)
+    else:
+        if sys.platform=='darwin':
+            for base in (Path('/Applications'),Path.home()/'Applications'):
+                for app,exe in (('Microsoft Edge.app','Microsoft Edge'),
+                                ('Google Chrome.app','Google Chrome'),
+                                ('Chromium.app','Chromium')):
+                    p=base/app/'Contents'/'MacOS'/exe
+                    if p.is_file():return str(p)
+        for name in ('microsoft-edge','microsoft-edge-stable','chromium','chromium-browser','google-chrome','google-chrome-stable'):
+            found=shutil.which(name)
+            if found:return found
     raise BrowserLoginError('Microsoft Edgeが見つかりません。Edgeをインストールしてください。')
 
 class BrowserLogin:

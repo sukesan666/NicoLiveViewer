@@ -80,7 +80,10 @@ class StudioApp:
         self.last_saved=time.monotonic()
         if not Path(self.settings['player_path']).is_file():self.settings['player_path']=find_player()
         if not Path(self.settings['ffmpeg_path']).is_file():
-            candidates=[app_dir()/'player'/'ffmpeg.exe',app_dir().parent/'ffmpeg'/'ffmpeg.exe']
+            exe='ffmpeg.exe' if os.name=='nt' else 'ffmpeg'
+            candidates=[app_dir()/'player'/exe,app_dir().parent/'ffmpeg'/exe]
+            if sys.platform=='darwin':
+                candidates+=[Path('/opt/homebrew/bin/ffmpeg'),Path('/usr/local/bin/ffmpeg')]
             self.settings['ffmpeg_path']=next((str(p) for p in candidates if p.is_file()),shutil.which('ffmpeg') or '')
         if not self.settings['svp_player_path']:self.settings['svp_player_path']=svp.find_player()
         root._window_memory=WindowMemory(root,self.store.directory/'window-layout.json')

@@ -5,6 +5,7 @@ from dataclasses import replace
 import os
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -270,7 +271,8 @@ class Worker:
         if use_svp:
             path=svp.player_path(self.settings['svp_player_path'])
             svp.check_pipe_available()
-        pipe=svp.PIPE if use_svp else r'\\.\pipe\nicoview-'+uuid.uuid4().hex
+        pipe=svp.PIPE if use_svp else (r'\\.\pipe\nicoview-'+uuid.uuid4().hex if os.name=='nt' else str(Path(tempfile.gettempdir())/f'nicoview-{uuid.uuid4().hex}.sock'))
+        self.pipe_path=None if (os.name=='nt' or use_svp) else Path(pipe)
         args=build_player_args(path,pipe,asset_path('comments.lua'),svp_enabled=use_svp)
         if preview:args=args[:-1]+['--loop-file=inf',str(asset_path('preview.mp4'))]
         elif media:args=args[:-1]+(['--start='+str(float(start_time))] if start_time else [])+[str(media)]
@@ -427,6 +429,8 @@ class Worker:
                 try:self.player.stdin.close()
                 except (OSError,ValueError):pass
             if self.ipc:self.ipc.close();self.ipc=None
+            if getattr(self,'pipe_path',None):
+                self.pipe_path.unlink(missing_ok=True);self.pipe_path=None
             if self.overlay_thread:self.overlay_thread.join(timeout=1)
             if self.source:
                 try:self.source.close()

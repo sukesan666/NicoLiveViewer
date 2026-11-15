@@ -20,6 +20,11 @@ class PlaybackTests(unittest.TestCase):
         args=build_player_args('C:/日本語 空白/mpv.exe','pipe-name','x.lua')
         self.assertEqual(args[0],'C:/日本語 空白/mpv.exe')
         self.assertIn('--no-config',args);self.assertIn('--input-ipc-server=pipe-name',args)
+        self.assertIn('--deband=yes',args)
+        self.assertIn('--scale=ewa_lanczossharp',args)
+        self.assertIn('--cscale=ewa_lanczossharp',args)
+        self.assertIn('--dscale=mitchell',args)
+        self.assertIn('--scale-antiring=0.6',args)
 
     def test_controller_duplicate_and_stale(self):
         c=Controller(); c._send=MagicMock();c._ensure=MagicMock()

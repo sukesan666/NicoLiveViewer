@@ -1,15 +1,18 @@
 """Windows integrations, activated only by explicit shell calls."""
 import ctypes
-from ctypes import wintypes
 from datetime import datetime
 import io
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import wave
+if sys.platform=='win32':
+    from ctypes import wintypes
 
 
 def in_quiet_hours(settings,now=None):
@@ -55,35 +58,89 @@ class NotificationSound:
             if self.last_event is not None and current-self.last_event<float(settings.get('notification_group_seconds',5)): return False
             try: data=scaled_wav(path,settings.get('sound_volume',80))
             except (OSError,ValueError,wave.Error,EOFError): return False
-            if sys.platform!='win32': return False
+            if sys.platform!='win32' and not sys.platform.startswith('linux') and sys.platform!='darwin': return False
             self.last_event=current
         def play():
-            import winsound
-            try: winsound.PlaySound(data,winsound.SND_MEMORY|winsound.SND_NODEFAULT)
-            except RuntimeError: pass
+            if sys.platform=='win32':
+                import winsound
+                try: winsound.PlaySound(data,winsound.SND_MEMORY|winsound.SND_NODEFAULT)
+                except RuntimeError: pass
+            elif sys.platform=='darwin':
+                if shutil.which('afplay'):
+                    tmp=None
+                    try:
+                        with tempfile.NamedTemporaryFile(suffix='.wav',delete=False) as f:
+                            tmp=Path(f.name); f.write(data)
+                        subprocess.run(['afplay',str(tmp)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=65)
+                    except (OSError,subprocess.SubprocessError): pass
+                    finally:
+                        if tmp: tmp.unlink(missing_ok=True)
+            else:
+                for cmd in (('paplay',),('aplay','-q')):
+                    if shutil.which(cmd[0]):
+                        try: subprocess.run(cmd,input=data,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=65)
+                        except (OSError,subprocess.SubprocessError): pass
+                        break
         threading.Thread(target=play,daemon=True,name='notification-sound').start()
         return True
 
 class SleepInhibitor:
-    def __init__(self): self.active=False
+    def __init__(self): self.active=False; self._proc=None
     def set_active(self,active):
-        if sys.platform!='win32': return False
-        flags=0x80000000 | (0x00000001 if active else 0)
-        if not ctypes.windll.kernel32.SetThreadExecutionState(flags): raise OSError('スリープ抑制を変更できません')
-        self.active=bool(active); return True
+        if sys.platform=='win32':
+            flags=0x80000000 | (0x00000001 if active else 0)
+            if not ctypes.windll.kernel32.SetThreadExecutionState(flags): raise OSError('スリープ抑制を変更できません')
+            self.active=bool(active); return True
+        if sys.platform=='darwin' and shutil.which('caffeinate'):
+            if active and (not self._proc or self._proc.poll() is not None):
+                self._proc=subprocess.Popen(['caffeinate','-di','-w',str(os.getpid())],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            elif not active and self._proc:
+                if self._proc.poll() is None: self._proc.terminate()
+                self._proc=None
+            self.active=bool(active); return True
+        return False
     def close(self):
         if self.active: self.set_active(False)
 
 def set_startup(enabled,command=None):
-    if sys.platform!='win32': raise OSError('Windows専用です')
-    import winreg
-    if enabled and command is None:
-        command=subprocess.list2cmdline([sys.executable] if getattr(sys,'frozen',False) else [sys.executable,'-m','nicoview'])
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER,r'Software\Microsoft\Windows\CurrentVersion\Run') as key:
-        if enabled: winreg.SetValueEx(key,'NicoLiveViewer',0,winreg.REG_SZ,command)
+    if sys.platform=='win32':
+        import winreg
+        if enabled and command is None:
+            command=subprocess.list2cmdline([sys.executable] if getattr(sys,'frozen',False) else [sys.executable,'-m','nicoview'])
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER,r'Software\Microsoft\Windows\CurrentVersion\Run') as key:
+            if enabled: winreg.SetValueEx(key,'NicoLiveViewer',0,winreg.REG_SZ,command)
+            else:
+                try: winreg.DeleteValue(key,'NicoLiveViewer')
+                except FileNotFoundError: pass
+        return
+    if sys.platform=='darwin':
+        plist=Path.home()/'Library'/'LaunchAgents'/'jp.nicoliveviewer.studio.plist'
+        if enabled:
+            args=[sys.executable] if getattr(sys,'frozen',False) else [sys.executable,'-m','nicoview']
+            items=''.join(f'    <string>{a}</string>\n' for a in args)
+            plist.parent.mkdir(parents=True,exist_ok=True)
+            plist.write_text('<?xml version="1.0" encoding="UTF-8"?>\n'
+                             '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+                             '<plist version="1.0"><dict>\n'
+                             '  <key>Label</key><string>jp.nicoliveviewer.studio</string>\n'
+                             '  <key>ProgramArguments</key><array>\n'+items+'  </array>\n'
+                             '  <key>RunAtLoad</key><true/>\n'
+                             '</dict></plist>\n',encoding='utf-8')
         else:
-            try: winreg.DeleteValue(key,'NicoLiveViewer')
-            except FileNotFoundError: pass
+            plist.unlink(missing_ok=True)
+        return
+    if sys.platform.startswith('linux'):
+        import shlex
+        autostart=Path(os.getenv('XDG_CONFIG_HOME') or (Path.home()/'.config'))/'autostart'/'nicoliveviewer.desktop'
+        if enabled:
+            if command is None:
+                command=shlex.join([sys.executable] if getattr(sys,'frozen',False) else [sys.executable,'-m','nicoview'])
+            autostart.parent.mkdir(parents=True,exist_ok=True)
+            autostart.write_text(f'[Desktop Entry]\nType=Application\nName=NicoLive Studio\nExec={command}\nTerminal=false\n',encoding='utf-8')
+        else:
+            autostart.unlink(missing_ok=True)
+        return
+    raise OSError('Windows専用です')
 
 class TrayIcon:
     """Native shell icon. Call start/stop on Tk's thread; callbacks run there.

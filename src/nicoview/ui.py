@@ -25,7 +25,11 @@ def app_dir():
 
 
 def find_player():
-    candidates=[app_dir()/'player'/'mpv.exe',Path(__file__).resolve().parents[3]/'player'/'mpv.exe']
+    exe='mpv.exe' if os.name=='nt' else 'mpv'
+    candidates=[app_dir()/'player'/exe,Path(__file__).resolve().parents[3]/'player'/exe]
+    if sys.platform=='darwin':
+        candidates+=[Path('/Applications/mpv.app/Contents/MacOS/mpv'),
+                     Path('/opt/homebrew/bin/mpv'),Path('/usr/local/bin/mpv')]
     for p in candidates:
         if p.is_file():return str(p)
     return shutil.which('mpv') or ''
@@ -57,8 +61,11 @@ class App:
         self.settings=clean_settings(load_settings(self.settings_path),self.fonts)
         if not Path(self.settings['player_path']).is_file():self.settings['player_path']=find_player()
         if not Path(self.settings['ffmpeg_path']).is_file():
-            bundled=app_dir()/'player'/'ffmpeg.exe'
-            self.settings['ffmpeg_path']=str(bundled) if bundled.is_file() else (shutil.which('ffmpeg') or '')
+            exe='ffmpeg.exe' if os.name=='nt' else 'ffmpeg'
+            candidates=[app_dir()/'player'/exe]
+            if sys.platform=='darwin':
+                candidates+=[Path('/opt/homebrew/bin/ffmpeg'),Path('/usr/local/bin/ffmpeg')]
+            self.settings['ffmpeg_path']=next((str(p) for p in candidates if p.is_file()),shutil.which('ffmpeg') or '')
         self.url=tk.StringVar();self.email=tk.StringVar();self.password=tk.StringVar();self.login=tk.BooleanVar(value=False)
         self.remember=tk.BooleanVar(value=False)
         self.font=tk.StringVar(value=self.settings['font']);self.size=tk.IntVar(value=self.settings['size'])
@@ -191,7 +198,8 @@ class App:
         except tk.TclError:pass
 
     def browse(self,var):
-        path=filedialog.askopenfilename(parent=self.root,filetypes=[(tr('実行ファイル'),'*.exe')])
+        types=[(tr('実行ファイル'),'*.exe'),(tr('すべて'),'*.*')] if os.name=='nt' else [(tr('すべて'),'*.*')]
+        path=filedialog.askopenfilename(parent=self.root,filetypes=types)
         if path:var.set(path);self.apply()
 
     def values(self):

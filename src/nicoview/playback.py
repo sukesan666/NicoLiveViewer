@@ -12,6 +12,8 @@ def build_player_args(player_path, pipe, script, svp_enabled=False):
             '--hr-seek-framedrop=no','--resume-playback=no'] if svp_enabled else [])
     return [str(player_path),'--no-config','--idle=yes','--force-window=yes',
             '--video-sync=display-resample',
+            '--deband=yes','--scale=ewa_lanczossharp','--cscale=ewa_lanczossharp',
+            '--dscale=mitchell','--scale-antiring=0.6',
             '--keep-open=no','--terminal=no','--input-terminal=no',
             '--input-ipc-server='+pipe,'--script='+str(script),
             '--title=ニコ生ビューア','--cache=yes','--cache-secs=3','--demuxer-max-bytes=32MiB']+extra+['-']

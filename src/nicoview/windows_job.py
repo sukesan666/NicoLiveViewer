@@ -1,12 +1,12 @@
 """Kill only this app's worker and descendants if the UI exits unexpectedly."""
 import ctypes
-from ctypes import wintypes as W
 import os
 
 class Job:
     def __init__(self, process):
-        self.handle=None
+        self.handle=None; self.process=process
         if os.name!='nt': return
+        from ctypes import wintypes as W
         k=ctypes.WinDLL('kernel32',use_last_error=True); self.k=k
         class Basic(ctypes.Structure):
             _fields_=[('process_time',ctypes.c_int64),('job_time',ctypes.c_int64),('flags',W.DWORD),
@@ -32,7 +32,9 @@ class Job:
     @property
     def active_process_count(self):
         """Count owned descendants, including replacements of an exited launcher."""
-        if not self.handle:return 0
+        if not self.handle:
+            return 1 if (self.process and self.process.poll() is None) else 0
+        from ctypes import wintypes as W
         class Accounting(ctypes.Structure):
             _fields_=[('user',ctypes.c_int64),('kernel',ctypes.c_int64),
                       ('period_user',ctypes.c_int64),('period_kernel',ctypes.c_int64),

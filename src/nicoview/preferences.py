@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import threading
 from urllib.parse import urlsplit,urlunsplit
@@ -44,7 +45,14 @@ def atomic_json(path,value,backup=True):
 
 class PreferenceStore:
     def __init__(self,path=None):
-        self.directory=Path(path) if path is not None else Path(os.getenv('APPDATA',str(Path.home()/'AppData'/'Roaming')))/'NicoLiveViewer'
+        if path is not None:
+            self.directory=Path(path)
+        elif os.name=='nt':
+            self.directory=Path(os.getenv('APPDATA',str(Path.home()/'AppData'/'Roaming')))/'NicoLiveViewer'
+        elif sys.platform=='darwin' and not os.getenv('XDG_CONFIG_HOME'):
+            self.directory=Path.home()/'Library'/'Application Support'/'NicoLiveViewer'
+        else:
+            self.directory=Path(os.getenv('XDG_CONFIG_HOME',str(Path.home()/'.config')))/'NicoLiveViewer'
         self.path=self.directory
         self.settings_path=self.directory/'settings.json'
         self.state_path=self.directory/'state.json'

@@ -9,6 +9,7 @@ import requests
 from lxml import html
 import os
 from pathlib import Path
+import sys
 import threading
 from .ui import app_dir
 from .sessions import clean_cookies
@@ -281,7 +282,12 @@ def thumbnail_dir():
     try:d.mkdir(parents=True,exist_ok=True)
     except OSError:
         # Use per-user storage if the app directory is read-only.
-        local_app_data=Path(os.getenv('LOCALAPPDATA') or Path.home()/'AppData'/'Local')
+        if os.name=='nt':
+            local_app_data=Path(os.getenv('LOCALAPPDATA') or Path.home()/'AppData'/'Local')
+        elif sys.platform=='darwin' and not os.getenv('XDG_CACHE_HOME'):
+            local_app_data=Path.home()/'Library'/'Caches'
+        else:
+            local_app_data=Path(os.getenv('XDG_CACHE_HOME') or Path.home()/'.cache')
         return local_app_data/'NicoLiveViewer'/'thumbnails'
     return d
 

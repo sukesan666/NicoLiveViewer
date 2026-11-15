@@ -1,18 +1,63 @@
-"""Opt-in credential storage, encrypted with Windows DPAPI CurrentUser."""
+"""Opt-in credential storage, encrypted with Windows DPAPI CurrentUser or POSIX per-user AES-GCM."""
 import ctypes
-from ctypes import wintypes as W
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 
 MAGIC=b'NICOVIEW-DPAPI-1\x00'
 
-class Blob(ctypes.Structure):
-    _fields_=[('size',W.DWORD),('data',ctypes.POINTER(ctypes.c_ubyte))]
+def _posix_key(create=False) -> bytes:
+    from Crypto.Protocol.KDF import HKDF
+    from Crypto.Hash import SHA256
+    if sys.platform=='darwin' and not os.getenv('XDG_CONFIG_HOME'):
+        base=Path.home()/'Library'/'Application Support'/'NicoLiveViewer'
+    else:
+        base=Path(os.getenv('XDG_CONFIG_HOME') or (Path.home()/'.config'))/'NicoLiveViewer'
+    key_file=base/'.master.key'
+    if not key_file.is_file():
+        if not create:raise OSError('Windowsの暗号化・復号に失敗しました。')
+        base.mkdir(parents=True,exist_ok=True)
+        try:os.chmod(base,0o700)
+        except OSError:pass
+        secret=os.urandom(32)
+        tmp=None
+        try:
+            with tempfile.NamedTemporaryFile(dir=base,prefix='.key-',delete=False) as f:
+                tmp=Path(f.name)
+                try:os.chmod(tmp,0o600)
+                except OSError:pass
+                f.write(secret);f.flush();os.fsync(f.fileno())
+            tmp.replace(key_file)
+        finally:
+            if tmp:tmp.unlink(missing_ok=True)
+    raw=key_file.read_bytes()
+    if len(raw)!=32:raise OSError('Windowsの暗号化・復号に失敗しました。')
+    uid=str(os.getuid()).encode('ascii') if hasattr(os,'getuid') else b'0'
+    return HKDF(raw,32,b'nicoview-salt:'+uid,SHA256,context=b'nicoview-credentials-v1')
+
+def _posix_crypt(data: bytes, decrypt=False) -> bytes:
+    from Crypto.Cipher import AES
+    try:
+        key=_posix_key(create=not decrypt)
+        if not decrypt:
+            nonce=os.urandom(12)
+            cipher=AES.new(key,AES.MODE_GCM,nonce=nonce)
+            ct,tag=cipher.encrypt_and_digest(data)
+            return nonce+tag+ct
+        if len(data)<28:raise ValueError('Truncated ciphertext')
+        nonce,tag,ct=data[:12],data[12:28],data[28:]
+        cipher=AES.new(key,AES.MODE_GCM,nonce=nonce)
+        return cipher.decrypt_and_verify(ct,tag)
+    except (OSError,ValueError,KeyError) as exc:
+        raise OSError('Windowsの暗号化・復号に失敗しました。') from exc
 
 def _crypt(data: bytes, decrypt=False) -> bytes:
-    if os.name!='nt':raise OSError('Windowsの暗号化機能が必要です。')
+    if os.name!='nt':return _posix_crypt(data,decrypt)
+    from ctypes import wintypes as W
+    class Blob(ctypes.Structure):
+        _fields_=[('size',W.DWORD),('data',ctypes.POINTER(ctypes.c_ubyte))]
     crypt=ctypes.WinDLL('crypt32',use_last_error=True)
     kernel=ctypes.WinDLL('kernel32',use_last_error=True)
     function=crypt.CryptUnprotectData if decrypt else crypt.CryptProtectData

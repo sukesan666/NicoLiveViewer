@@ -1,5 +1,7 @@
 import json
 import os
+import socket
+import stat
 import threading
 import time
 
@@ -9,7 +11,7 @@ class PlayerIPC:
         self.path=path; self.file=None; self.reader=None; self.lock=threading.Lock(); self.closed=False
         self.read_lock=threading.RLock()
         self.properties={};self.buffer=b'';self.events=[]
-        self._windows_pipe=None
+        self._windows_pipe=None; self._sock=None
 
     def connect(self, stop=None, timeout=8):
         deadline=time.monotonic()+timeout
@@ -18,6 +20,15 @@ class PlayerIPC:
                 if os.name=='nt':
                     from .windows_pipe import WindowsPipe
                     self.file=self.reader=self._windows_pipe=WindowsPipe(self.path)
+                elif hasattr(socket,'AF_UNIX') and stat.S_ISSOCK(os.stat(self.path).st_mode):
+                    sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)
+                    try:
+                        sock.connect(str(self.path))
+                        self._sock=sock
+                        self.file=sock.makefile('wb',buffering=0)
+                        self.reader=sock.makefile('rb',buffering=0)
+                    except OSError:
+                        sock.close();raise
                 else:
                     self.file=open(self.path,'r+b',buffering=0)
                     self.reader=os.fdopen(os.dup(self.file.fileno()),'rb',buffering=0)
@@ -30,8 +41,13 @@ class PlayerIPC:
         return self._windows_pipe.read_available() if self._windows_pipe else b''
 
     def server_process_id(self):
-        if not self._windows_pipe:raise OSError('Windows player pipe is not connected')
-        return self._windows_pipe.server_process_id()
+        if self._windows_pipe:
+            return self._windows_pipe.server_process_id()
+        if self._sock and hasattr(socket,'SO_PEERCRED'):
+            import struct
+            creds=self._sock.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,struct.calcsize('3i'))
+            return struct.unpack('3i',creds)[0]
+        raise OSError('Windows player pipe is not connected')
 
     def _drain(self):
         try:
@@ -95,4 +111,7 @@ class PlayerIPC:
         self.closed=True
         if self.file:
             try: self.file.close()
+            except OSError: pass
+        if self._sock:
+            try: self._sock.close()
             except OSError: pass

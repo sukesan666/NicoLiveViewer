@@ -3,10 +3,17 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
-from nicoview.credentials import CredentialStore, protect
+from nicoview.credentials import CredentialStore, protect, _posix_crypt
 
-@unittest.skipUnless(os.name=='nt','Windows DPAPI integration')
 class CredentialTests(unittest.TestCase):
+    def test_posix_aes_gcm_roundtrip_and_tamper(self):
+        with tempfile.TemporaryDirectory() as d, patch.dict(os.environ,{'XDG_CONFIG_HOME':d}):
+            encrypted=_posix_crypt(b'secret-payload-123')
+            self.assertNotIn(b'secret-payload',encrypted)
+            self.assertEqual(_posix_crypt(encrypted,decrypt=True),b'secret-payload-123')
+            tampered=encrypted[:-1]+bytes([encrypted[-1]^1])
+            with self.assertRaises(OSError):
+                _posix_crypt(tampered,decrypt=True)
     def test_encrypted_roundtrip_and_delete(self):
         try:protect(b'nonsecret-capability-probe')
         except OSError:self.skipTest('DPAPI CurrentUser unavailable under sandbox account (no loaded user profile)')
